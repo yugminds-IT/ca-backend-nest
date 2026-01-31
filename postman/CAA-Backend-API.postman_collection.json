@@ -1,0 +1,719 @@
+{
+  "info": {
+    "name": "CAA Backend API",
+    "description": "End-to-end API tests for NestJS CAA Backend. Includes Auth, Organizations, Users, Clients, Business Types, Services, Client Files, Email Templates, Mail Management.\n\n**Enums:**\n- **Roles:** MASTER_ADMIN, ORG_ADMIN, CAA, ORG_EMPLOYEE, CLIENT\n- **Template categories:** service, login, notification, follow_up, reminder\n- **Template types (by category):** service: gst_filing, income_tax_return, tds, audit, roc_filing, pf_esic, accounting, book_keeping, company_registration, llp_registration, trademark, iso_certification, labour_compliance, custom_service | login: login_credentials, password_reset, welcome_email | notification: client_onboarded, service_assigned, document_uploaded, payment_received | follow_up: follow_up_documents, follow_up_payment, follow_up_meeting | reminder: reminder_deadline, reminder_submission, reminder_renewal\n- **Client status:** active, inactive, terminated",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "access_token", "value": "" },
+    { "key": "refresh_token", "value": "" },
+    { "key": "organization_id", "value": "1" },
+    { "key": "client_id", "value": "1" },
+    { "key": "user_id", "value": "1" },
+    { "key": "template_id", "value": "1" },
+    { "key": "schedule_id", "value": "1" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"your-password\"\n}"
+            },
+            "description": "Returns accessToken, refreshToken, user. Tokens are saved to collection variables for other requests.",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "const res = pm.response.json();",
+                    "if (res.accessToken) { pm.collectionVariables.set('access_token', res.accessToken); }",
+                    "if (res.refreshToken) { pm.collectionVariables.set('refresh_token', res.refreshToken); }",
+                    "pm.test('Status is 201 or 200', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));"
+                  ],
+                  "type": "text/javascript"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refresh_token}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Me (current user)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/auth/me"
+          }
+        },
+        {
+          "name": "Get Roles (dropdown)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/auth/roles"
+          }
+        },
+        {
+          "name": "Get Organizations (dropdown)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/auth/organizations"
+          }
+        },
+        {
+          "name": "Register (generic)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"password123\",\n  \"roleName\": \"CAA\",\n  \"organizationId\": 1\n}"
+            },
+            "description": "roleName: MASTER_ADMIN | ORG_ADMIN | CAA | ORG_EMPLOYEE | CLIENT. organizationId required for org roles."
+          }
+        },
+        {
+          "name": "Signup Master Admin",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/signup/master-admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"master@example.com\",\n  \"password\": \"password123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Signup Organization",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/signup/organization",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organization\": {\n    \"name\": \"Acme CA\",\n    \"city\": \"Mumbai\",\n    \"state\": \"MH\",\n    \"country\": \"India\",\n    \"pincode\": \"400001\"\n  },\n  \"admin\": {\n    \"name\": \"Org Admin\",\n    \"email\": \"orgadmin@example.com\",\n    \"password\": \"password123\",\n    \"phone\": \"9876543210\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Signup Org Admin (existing org)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/signup/org-admin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationId\": 1,\n  \"name\": \"Another Admin\",\n  \"email\": \"admin2@example.com\",\n  \"password\": \"password123\",\n  \"phone\": \"9876543211\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/forgot-password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/auth/reset-password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"otp\": \"123456\",\n  \"newPassword\": \"newpassword123\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Organizations",
+      "item": [
+        {
+          "name": "Create Organization",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/organizations",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New CA Firm\",\n  \"slug\": \"new-ca-firm\",\n  \"city\": \"Delhi\",\n  \"state\": \"DL\",\n  \"country\": \"India\",\n  \"pincode\": \"110001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Organizations",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/organizations"
+          }
+        },
+        {
+          "name": "Get Organization by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/organizations/{{organization_id}}"
+          }
+        },
+        {
+          "name": "Update Organization",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/organizations/{{organization_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated CA Firm\",\n  \"city\": \"Mumbai\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Organization",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/organizations/{{organization_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create Employee",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/users/employees",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationId\": 1,\n  \"name\": \"John CAA\",\n  \"email\": \"caa@example.com\",\n  \"password\": \"password123\",\n  \"phone\": \"9876543210\",\n  \"roleName\": \"CAA\"\n}"
+            },
+            "description": "roleName: ORG_ADMIN | CAA | ORG_EMPLOYEE. Master admin must pass organizationId."
+          }
+        },
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users?organizationId=1"
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/{{user_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "Create Client",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationId\": 1,\n  \"name\": \"ABC Pvt Ltd\",\n  \"email\": \"client@example.com\",\n  \"phone\": \"9876543210\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create Client with Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients/with-login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"client@example.com\",\n  \"name\": \"Client Name\",\n  \"phone\": \"9876543210\",\n  \"organizationId\": 1\n}"
+            },
+            "description": "Returns client + generatedPassword. Master admin must pass organizationId."
+          }
+        },
+        {
+          "name": "Onboard Client (full form)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients/onboard",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Full Client\",\n  \"email\": \"fullclient@example.com\",\n  \"companyName\": \"Company Ltd\",\n  \"businessTypeId\": 1,\n  \"panNumber\": \"ABCDE1234F\",\n  \"gstNumber\": \"27XXXXX\",\n  \"status\": \"active\",\n  \"address\": \"123 Street\",\n  \"city\": \"Mumbai\",\n  \"state\": \"MH\",\n  \"country\": \"India\",\n  \"pincode\": \"400001\",\n  \"serviceIds\": [1, 2],\n  \"onboardDate\": \"2025-01-01\",\n  \"followupDate\": \"2025-02-01\",\n  \"additionalNotes\": \"Notes\",\n  \"phone\": \"9876543210\",\n  \"organizationId\": 1\n}"
+            },
+            "description": "status: active | inactive | terminated. organizationId required for master admin."
+          }
+        },
+        {
+          "name": "List Clients",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/clients?organizationId=1"
+          }
+        },
+        {
+          "name": "Get Client by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/clients/{{client_id}}"
+          }
+        },
+        {
+          "name": "Update Client",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients/{{client_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Client\",\n  \"status\": \"active\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Client",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/clients/{{client_id}}"
+          }
+        },
+        {
+          "name": "List Directors",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/clients/{{client_id}}/directors"
+          }
+        },
+        {
+          "name": "Add Director",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients/{{client_id}}/directors",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"directorName\": \"Director Name\",\n  \"email\": \"director@example.com\",\n  \"phone\": \"9876543211\",\n  \"designation\": \"Director\",\n  \"din\": \"\",\n  \"pan\": \"\",\n  \"aadharNumber\": \"\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update Director",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/clients/{{client_id}}/directors/1",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"directorName\": \"Updated Director\",\n  \"email\": \"updated@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Director",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/clients/{{client_id}}/directors/1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Business Types",
+      "item": [
+        {
+          "name": "List Business Types",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/business-types"
+          }
+        },
+        {
+          "name": "Create Business Type",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/business-types",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Custom Type\",\n  \"organizationId\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Services",
+      "item": [
+        {
+          "name": "List Services",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/services"
+          }
+        },
+        {
+          "name": "Create Service",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/services",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Custom Service\",\n  \"organizationId\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Client Files",
+      "item": [
+        {
+          "name": "Upload Files (Client)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/client-files/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "files", "type": "file", "src": [] },
+                { "key": "type", "value": "document", "type": "text" }
+              ]
+            },
+            "description": "CLIENT role only. form-data: files (multiple), type (optional)."
+          }
+        },
+        {
+          "name": "List My Files (Client)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/client-files"
+          }
+        },
+        {
+          "name": "List Client Files (Org user)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/client-files/client/{{client_id}}"
+          }
+        },
+        {
+          "name": "Get Download URL",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/client-files/1/download-url"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Email Templates",
+      "item": [
+        {
+          "name": "Get Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/categories"
+          }
+        },
+        {
+          "name": "Get Types by Category",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=service"
+          }
+        },
+        {
+          "name": "Send Test Mail (no auth)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/email-templates/test-mail",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"Test from CAA\",\n  \"body\": \"This is a test email.\"\n}"
+            },
+            "description": "Public endpoint - no auth required. subject and body optional."
+          }
+        },
+        {
+          "name": "Get Variables",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/variables"
+          }
+        },
+        {
+          "name": "Create Template",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/email-templates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"category\": \"login\",\n  \"type\": \"login_credentials\",\n  \"name\": \"Login Credentials\",\n  \"subject\": \"Your login - {{client_name}}\",\n  \"body\": \"Hello {{client_name}},\\nYour email: {{login_email}}\\nPassword: {{login_password}}\\nURL: {{login_url}}\"\n}"
+            },
+            "description": "category: service|login|notification|follow_up|reminder. type per category (see Enums)."
+          }
+        },
+        {
+          "name": "List Templates",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates?category=login"
+          }
+        },
+        {
+          "name": "Get Template by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/{{template_id}}"
+          }
+        },
+        {
+          "name": "Update Template",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/email-templates/{{template_id}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"Updated subject\",\n  \"body\": \"Updated body\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Template",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/email-templates/{{template_id}}"
+          }
+        },
+        {
+          "name": "Send Email with Template",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/email-templates/send",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"templateId\": 1,\n  \"variables\": {\n    \"client_name\": \"John\",\n    \"login_email\": \"john@example.com\",\n    \"login_password\": \"temp123\",\n    \"login_url\": \"https://app.example.com\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mail Management",
+      "item": [
+        {
+          "name": "Get Recipients",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/mail-management/recipients?organizationId=1"
+          }
+        },
+        {
+          "name": "Get Org Mails (Master)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/mail-management/org-mails?organizationId=1"
+          }
+        },
+        {
+          "name": "Get Templates for Sending",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/mail-management/templates"
+          }
+        },
+        {
+          "name": "Schedule Email (single date)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/mail-management/schedule",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": 1,\n  \"recipientEmails\": [\"user@example.com\"],\n  \"variables\": { \"client_name\": \"John\" },\n  \"schedule\": {\n    \"type\": \"single_date\",\n    \"date\": \"2025-02-15\",\n    \"times\": [\"09:00\", \"14:00\"]\n  }\n}"
+            },
+            "description": "schedule.type: single_date | date_range | multiple_dates. times: [\"HH:mm\"]"
+          }
+        },
+        {
+          "name": "Schedule Email (date range)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/mail-management/schedule",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": 1,\n  \"recipientEmails\": [\"user@example.com\"],\n  \"schedule\": {\n    \"type\": \"date_range\",\n    \"fromDate\": \"2025-02-01\",\n    \"toDate\": \"2025-02-05\",\n    \"times\": [\"10:00\"]\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "Schedule Email (multiple dates)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{base_url}}/mail-management/schedule",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": 1,\n  \"recipientEmails\": [\"user@example.com\"],\n  \"schedule\": {\n    \"type\": \"multiple_dates\",\n    \"dates\": [\"2025-02-01\", \"2025-02-15\"],\n    \"times\": [\"09:00\"]\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "List Schedules",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/mail-management/schedules?status=pending"
+          }
+        },
+        {
+          "name": "Get Schedule by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/mail-management/schedules/{{schedule_id}}"
+          }
+        },
+        {
+          "name": "Cancel Schedule",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/mail-management/schedules/{{schedule_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Enums Reference",
+      "item": [
+        {
+          "name": "Roles",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/auth/roles"
+          },
+          "description": "MASTER_ADMIN, ORG_ADMIN, CAA, ORG_EMPLOYEE, CLIENT"
+        },
+        {
+          "name": "Template Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/categories"
+          },
+          "description": "service, login, notification, follow_up, reminder"
+        },
+        {
+          "name": "Template Types (Service)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=service"
+          },
+          "description": "gst_filing, income_tax_return, tds, audit, roc_filing, pf_esic, accounting, book_keeping, company_registration, llp_registration, trademark, iso_certification, labour_compliance, custom_service"
+        },
+        {
+          "name": "Template Types (Login)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=login"
+          },
+          "description": "login_credentials, password_reset, welcome_email"
+        },
+        {
+          "name": "Template Types (Notification)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=notification"
+          },
+          "description": "client_onboarded, service_assigned, document_uploaded, payment_received"
+        },
+        {
+          "name": "Template Types (Follow-up)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=follow_up"
+          },
+          "description": "follow_up_documents, follow_up_payment, follow_up_meeting"
+        },
+        {
+          "name": "Template Types (Reminder)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/types?category=reminder"
+          },
+          "description": "reminder_deadline, reminder_submission, reminder_renewal"
+        },
+        {
+          "name": "Template Variables",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/email-templates/variables"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Root",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{base_url}}/"
+          }
+        }
+      ]
+    }
+  ]
+}
