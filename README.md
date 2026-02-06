@@ -57,18 +57,24 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
-## Deployment
+## Deployment (Coolify)
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Deploy to [Coolify](https://coolify.io) as a web application:
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+1. **Connect your repo** to Coolify and create a new application
+2. **Build pack**: Nixpacks (auto-detected for Node.js)
+3. **Environment variables**: Add all required vars from `.env.example` in Coolify's service settings
+4. **Build**: `npm ci && npm run build` (automatic)
+5. **Start**: `npm run start:prod` (configured in `nixpacks.toml`)
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+Ensure these are set in Coolify:
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+- `DATABASE_URL` – PostgreSQL connection string
+- `SECRET_KEY` – JWT/encryption secret (32+ chars)
+- `PORT` – Coolify sets this automatically; app listens on `0.0.0.0`
+- `CORS_ORIGINS` – Comma-separated frontend URLs
+- `FRONTEND_URL` – Used in emails (login/reset links)
+- SMTP and AWS S3 vars as needed
 
 ## Resources
 

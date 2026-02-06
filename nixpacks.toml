@@ -1,0 +1,6 @@
+# Coolify / Nixpacks configuration for production deployment
+# Build: npm ci && npm run build
+# Start: npm run start:prod
+
+[start]
+cmd = "npm run start:prod"
