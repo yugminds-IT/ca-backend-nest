@@ -2,7 +2,7 @@ import { Injectable, ForbiddenException, BadRequestException, NotFoundException 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
-import { fileTypeFromBuffer } from 'file-type';
+import fileType from 'file-type';
 import { User } from '../entities/user.entity';
 import { Client } from '../entities/client.entity';
 import { ClientFile } from '../entities/client-file.entity';
@@ -79,7 +79,7 @@ export class ClientFilesService {
           `File ${file.originalname} exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB or is empty`,
         );
       }
-      const detected = await fileTypeFromBuffer(file.buffer);
+      const detected = await fileType.fromBuffer(file.buffer);
       const mime = detected?.mime ?? file.mimetype ?? 'application/octet-stream';
       if (!isAllowedMime(mime)) {
         throw new BadRequestException(
