@@ -248,7 +248,7 @@ export class MailManagementService {
     const qb = this.scheduleRepo
       .createQueryBuilder('s')
       .leftJoinAndSelect('s.template', 't')
-      .orderBy('s.scheduledAt', 'DESC');
+      .orderBy('s.id', 'DESC');
     if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
       if (organizationId != null) qb.andWhere('s.organizationId = :organizationId', { organizationId });
     } else {

@@ -109,6 +109,6 @@ export class EmailTemplatesController {
   @UseGuards(RolesGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
   sendWithTemplate(@Body() dto: SendTemplateEmailDto, @CurrentUser() user: User) {
-    return this.service.sendWithTemplate(dto.to, dto.templateId, dto.variables ?? {}, user);
+    return this.service.sendWithTemplate(dto.to, dto.templateId ?? null, dto.variables ?? {}, user, dto.subject, dto.body);
   }
 }

@@ -141,19 +141,21 @@ export class EmailTemplatesService {
     await this.repo.remove(template);
   }
 
-  /** Substitute variables and send email. Variables: { client_name: 'John' } -> {{client_name}} replaced. Injects org_name and org_admin_name when user belongs to an org. */
+  /** Substitute variables and send email. Supports template-based or custom (subject+body) sending. */
   async sendWithTemplate(
     to: string,
-    templateId: number,
+    templateIdOrNull: number | undefined | null,
     variables: Record<string, string> = {},
     currentUser: User,
+    customSubject?: string,
+    customBody?: string,
   ): Promise<{ sent: boolean }> {
-    const template = await this.repo.findOne({ where: { id: templateId } });
-    if (!template) throw new NotFoundException('Template not found');
-    if (!this.canAccess(currentUser, template)) throw new ForbiddenException('Access denied to this template');
+    let fromName: string | undefined;
+    let subject: string;
+    let html: string;
+    let text: string;
 
     const enriched = { ...variables };
-    let fromName: string | undefined;
     if (currentUser.organizationId != null) {
       const org = await this.organizationRepo.findOne({ where: { id: currentUser.organizationId } });
       enriched.org_name = org?.name ?? '';
@@ -161,10 +163,23 @@ export class EmailTemplatesService {
       fromName = currentUser.name ?? currentUser.email;
     }
 
-    const subject = this.substituteVariables(template.subject, enriched);
-    const body = this.substituteVariables(template.body, enriched);
-    const html = this.toProfessionalHtml(subject, body);
-    const text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (templateIdOrNull != null) {
+      const template = await this.repo.findOne({ where: { id: templateIdOrNull } });
+      if (!template) throw new NotFoundException('Template not found');
+      if (!this.canAccess(currentUser, template)) throw new ForbiddenException('Access denied to this template');
+      subject = this.substituteVariables(template.subject, enriched);
+      const body = this.substituteVariables(template.body, enriched);
+      html = this.toProfessionalHtml(subject, body);
+      text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    } else {
+      if (!customSubject?.trim()) throw new BadRequestException('Subject is required for custom emails');
+      if (!customBody?.trim()) throw new BadRequestException('Body is required for custom emails');
+      subject = this.substituteVariables(customSubject.trim(), enriched);
+      const body = this.substituteVariables(customBody.trim(), enriched);
+      html = this.toProfessionalHtml(subject, body);
+      text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
     const sent = await this.emailService.sendMail(to, subject, text, html, fromName);
     return { sent };
   }

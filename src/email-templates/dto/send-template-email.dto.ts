@@ -5,8 +5,20 @@ export class SendTemplateEmailDto {
   @IsEmail()
   to: string;
 
+  /** templateId OR (subject + body) must be provided. */
+  @IsOptional()
   @IsNumber()
-  templateId: number;
+  templateId?: number;
+
+  /** Used when sending a custom email without a template. */
+  @IsOptional()
+  @IsString()
+  subject?: string;
+
+  /** Used when sending a custom email without a template. */
+  @IsOptional()
+  @IsString()
+  body?: string;
 
   /** Variable values: { client_name: 'John', login_password: 'xxx', ... } */
   @IsOptional()

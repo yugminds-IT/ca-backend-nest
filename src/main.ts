@@ -1,3 +1,6 @@
+// Force UTC timezone so TypeORM reads PostgreSQL 'timestamp' columns correctly
+process.env.TZ = 'UTC';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ClassSerializerInterceptor } from '@nestjs/common';

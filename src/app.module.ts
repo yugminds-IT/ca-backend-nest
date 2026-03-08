@@ -38,7 +38,7 @@ import { EmailSchedule } from './entities/email-schedule.entity';
       url: process.env.DATABASE_URL,
       entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule],
       synchronize: false,
-      logging: process.env.NODE_ENV === 'development',
+      logging: false,
       extra:
         process.env.DB_SSL === 'true'
           ? { ssl: { rejectUnauthorized: false } }
