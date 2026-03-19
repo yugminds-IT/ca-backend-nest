@@ -18,7 +18,12 @@ async function bootstrap() {
     }),
   );
   const corsOrigins = process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
-  if (corsOrigins.length) app.enableCors({ origin: corsOrigins });
+  app.enableCors({
+    origin: corsOrigins.length ? corsOrigins : false,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  });
   const port = process.env.PORT ?? 3000;
   await app.listen(port, '0.0.0.0');
 }
