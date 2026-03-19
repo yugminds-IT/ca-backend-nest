@@ -18,10 +18,13 @@ export class EmailSchedule {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column('int', { name: 'templateId' })
-  templateId: number;
+  @Column('int', { name: 'templateId', nullable: true })
+  templateId: number | null;
 
-  /** JSON array of recipient email addresses */
+  /** Subject line — populated for custom emails (no template) */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  subject: string | null;
+
   @Column({ type: 'jsonb', name: 'recipientEmails' })
   recipientEmails: string[];
 
@@ -53,9 +56,9 @@ export class EmailSchedule {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @ManyToOne(() => EmailTemplate, { onDelete: 'CASCADE' })
+  @ManyToOne(() => EmailTemplate, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'templateId' })
-  template: EmailTemplate;
+  template: EmailTemplate | null;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'organizationId' })

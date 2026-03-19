@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { EmailTemplate } from '../entities/email-template.entity';
+import { EmailSchedule } from '../entities/email-schedule.entity';
 import { Organization } from '../entities/organization.entity';
 import { User } from '../entities/user.entity';
 import { CreateEmailTemplateDto, validateTemplateType } from './dto/create-email-template.dto';
@@ -22,6 +23,8 @@ export class EmailTemplatesService {
   constructor(
     @InjectRepository(EmailTemplate)
     private repo: Repository<EmailTemplate>,
+    @InjectRepository(EmailSchedule)
+    private scheduleRepo: Repository<EmailSchedule>,
     @InjectRepository(Organization)
     private organizationRepo: Repository<Organization>,
     private emailService: EmailService,
@@ -181,6 +184,22 @@ export class EmailTemplatesService {
     }
 
     const sent = await this.emailService.sendMail(to, subject, text, html, fromName);
+
+    const now = new Date();
+    await this.scheduleRepo.save(
+      this.scheduleRepo.create({
+        templateId: templateIdOrNull ?? null,
+        subject: templateIdOrNull == null ? subject : null,
+        recipientEmails: [to],
+        variables: Object.keys(enriched).length > 0 ? enriched : null,
+        scheduledAt: now,
+        status: sent ? 'sent' : 'failed',
+        organizationId: currentUser.organizationId ?? null,
+        createdBy: currentUser.id,
+        sentAt: sent ? now : null,
+      }),
+    );
+
     return { sent };
   }
 

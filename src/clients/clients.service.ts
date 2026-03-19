@@ -338,7 +338,10 @@ export class ClientsService {
       }
     }
     const { serviceIds, onboardDate, followupDate, directors: directorsDto, login_email: loginEmail, login_password: loginPassword, remove_login: removeLogin, ...rest } = dto;
-    Object.assign(client, rest);
+    // Filter out undefined values — Object.assign would otherwise overwrite entity fields
+    // (e.g. userId) with undefined when only a subset of DTO fields are sent in the request.
+    const definedRest = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+    Object.assign(client, definedRest);
 
     // Remove login: delete user and clear client.userId
     if (removeLogin === true && client.userId != null) {
