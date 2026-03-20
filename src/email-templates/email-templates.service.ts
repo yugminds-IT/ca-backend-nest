@@ -227,59 +227,52 @@ export class EmailTemplatesService {
     return result;
   }
 
-  /** Wrap subject + body in a professional HTML email layout. Body is escaped then newlines → <br>. */
+  /** Strip editor-specific attributes (class, data-*) from HTML, or convert plain text to HTML. */
+  private sanitizeBody(body: string): string {
+    const hasHtml = /<[a-z][\s\S]*?>/i.test(body);
+    if (!hasHtml) {
+      // Plain text: double newline = new paragraph, single newline = <br>
+      const paragraphs = body.split(/\n\n+/);
+      return paragraphs
+        .filter((p) => p.trim())
+        .map((p) => {
+          const lines = p.split('\n').map((l) => this.escapeHtml(l)).join('<br>');
+          return `<p style="margin:0 0 1em;">${lines}</p>`;
+        })
+        .join('');
+    }
+    // HTML from editor: strip class/data-* attributes and normalize div → p
+    return body
+      .replace(/\s+class="[^"]*"/g, '')
+      .replace(/\s+class='[^']*'/g, '')
+      .replace(/\s+data-[a-z-]+=(?:"[^"]*"|'[^']*'|\S+)/g, '')
+      .replace(/<div><br\s*\/?><\/div>/gi, '<br>')
+      .replace(/<div>([\s\S]*?)<\/div>/gi, '<p>$1</p>');
+  }
+
+  /** Wrap body in a clean HTML email layout — no decorative header, no blue bar, no box. */
   toProfessionalHtml(subject: string, body: string): string {
     const escapedSubject = this.escapeHtml(subject);
-    const bodyEscaped = this.escapeHtml(body).replace(/\n/g, '<br>');
-    return `
-<!DOCTYPE html>
+    const sanitizedBody = this.sanitizeBody(body);
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <title>${escapedSubject}</title>
-  <!--[if mso]>
-  <noscript>
-    <xml>
-      <o:OfficeDocumentSettings>
-        <o:PixelsPerInch>96</o:PixelsPerInch>
-      </o:OfficeDocumentSettings>
-    </xml>
-  </noscript>
-  <![endif]-->
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-    table { border-collapse: collapse; mso-table-lspace: 0; mso-table-rspace: 0; }
-    img { border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
-    .wrapper { width: 100%; background-color: #f1f5f9; padding: 32px 16px; }
-    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    .header-bar { height: 4px; background-color: #2563eb; }
-    .header { padding: 24px 28px 20px; background-color: #ffffff; border-bottom: 1px solid #e2e8f0; }
-    .header-title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 20px; font-weight: 600; color: #0f172a; margin: 0; letter-spacing: -0.02em; line-height: 1.3; }
-    .content { padding: 28px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 1.65; color: #334155; }
-    .content p { margin: 0 0 1em; }
-    .content p:last-child { margin-bottom: 0; }
-    .content a { color: #2563eb; text-decoration: none; }
-    .content a:hover { text-decoration: underline; }
-    .footer { padding: 20px 28px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; color: #64748b; line-height: 1.5; text-align: center; }
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 1.65; color: #1a1a1a; background-color: #ffffff; -webkit-text-size-adjust: 100%; }
+    p { margin: 0 0 1em; }
+    p:last-child { margin-bottom: 0; }
+    a { color: #1a1a1a; text-decoration: underline; }
+    ol, ul { margin: 0 0 1em; padding-left: 1.5em; }
+    li { margin-bottom: 0.25em; }
   </style>
 </head>
-<body style="margin:0;padding:0;background-color:#f1f5f9;-webkit-text-size-adjust:100%;">
-  <div class="wrapper" style="width:100%;background-color:#f1f5f9;padding:32px 16px;">
-    <div class="container" style="max-width:600px;margin:0 auto;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-      <div class="header-bar" style="height:4px;background-color:#2563eb;"></div>
-      <div class="header" style="padding:24px 28px 20px;background-color:#ffffff;border-bottom:1px solid #e2e8f0;">
-        <h1 class="header-title" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:20px;font-weight:600;color:#0f172a;margin:0;letter-spacing:-0.02em;line-height:1.3;">${escapedSubject}</h1>
-      </div>
-      <div class="content" style="padding:28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.65;color:#334155;">
-        ${bodyEscaped}
-      </div>
-      <div class="footer" style="padding:20px 28px;background-color:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.5;text-align:center;">
-        This is an automated message from your CA organization. Please do not reply directly to this email.
-      </div>
-    </div>
+<body>
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.65;color:#1a1a1a;">
+    ${sanitizedBody}
   </div>
 </body>
 </html>`.trim();
