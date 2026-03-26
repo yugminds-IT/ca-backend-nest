@@ -6,12 +6,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { LoggingInterceptor } from './common/logging.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useGlobalInterceptors(
-    new LoggingInterceptor(),
     new ClassSerializerInterceptor(app.get(Reflector)),
   );
   app.useGlobalPipes(

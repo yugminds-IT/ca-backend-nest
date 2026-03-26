@@ -80,7 +80,11 @@ export class EmailTemplatesService {
 
   async findAll(currentUser: User, category?: string, organizationId?: number): Promise<EmailTemplate[]> {
     if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
-      const qb = this.repo.createQueryBuilder('t').orderBy('t.category', 'ASC').addOrderBy('t.type', 'ASC');
+      const qb = this.repo
+        .createQueryBuilder('t')
+        .leftJoinAndSelect('t.organization', 'org')
+        .orderBy('t.category', 'ASC')
+        .addOrderBy('t.type', 'ASC');
       if (category) qb.andWhere('t.category = :category', { category });
       if (organizationId != null) qb.andWhere('t.organizationId = :organizationId', { organizationId });
       return qb.getMany();

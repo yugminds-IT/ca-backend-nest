@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { LoggingInterceptor } from './common/logging.interceptor';
+import { ActivityLogModule } from './activity-log/activity-log.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { ClientsModule } from './clients/clients.module';
@@ -16,6 +18,7 @@ import { S3Module } from './s3/s3.module';
 import { ClientFilesModule } from './client-files/client-files.module';
 import { EmailTemplatesModule } from './email-templates/email-templates.module';
 import { MailManagementModule } from './mail-management/mail-management.module';
+import { MasterAdminModule } from './master-admin/master-admin.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { Role } from './entities/role.entity';
 import { Organization } from './entities/organization.entity';
@@ -28,6 +31,7 @@ import { Otp } from './entities/otp.entity';
 import { ClientFile } from './entities/client-file.entity';
 import { EmailTemplate } from './entities/email-template.entity';
 import { EmailSchedule } from './entities/email-schedule.entity';
+import { ActivityLog } from './entities/activity-log.entity';
 
 @Module({
   imports: [
@@ -36,18 +40,25 @@ import { EmailSchedule } from './entities/email-schedule.entity';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule],
+      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, ActivityLog],
       synchronize: false,
       logging: false,
-      extra:
-        process.env.DB_SSL === 'true'
-          ? { ssl: { rejectUnauthorized: false } }
-          : {
-              max: parseInt(process.env.DB_POOL_SIZE ?? '20', 10),
-              connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT ?? '10', 10) * 1000,
-              statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT ?? '30', 10) * 1000,
-            },
+      retryAttempts: 5,
+      retryDelay: 3000,
+      extra: {
+        // Pool sizing
+        max: parseInt(process.env.DB_POOL_SIZE ?? '10', 10),
+        min: 1,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT ?? '10', 10) * 1000,
+        // Keep idle connections alive — prevents remote DB from closing them
+        keepAlive: true,
+        keepAliveInitialDelayMillis: 10000,
+        // SSL (required for Supabase / remote Postgres)
+        ...(process.env.DB_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
+      },
     }),
+    ActivityLogModule,
     EmailModule,
     S3Module,
     AuthModule,
@@ -59,11 +70,13 @@ import { EmailSchedule } from './entities/email-schedule.entity';
     ClientFilesModule,
     EmailTemplatesModule,
     MailManagementModule,
+    MasterAdminModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
   ],
 })
 export class AppModule {}

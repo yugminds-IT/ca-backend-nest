@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -16,6 +16,7 @@ import { OrganizationSignupDto } from './dto/organization-signup.dto';
 import { OrgAdminSignupDto } from './dto/org-admin-signup.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { RoleName } from '../common/enums/role.enum';
+import { ActivityLogService } from '../activity-log/activity-log.service';
 
 const OTP_EXPIRY_MINUTES = 10;
 const OTP_LENGTH = 6;
@@ -33,18 +34,77 @@ export class AuthService {
     private otpRepo: Repository<Otp>,
     private jwtService: JwtService,
     private emailService: EmailService,
+    @Optional() private activityLog?: ActivityLogService,
   ) {}
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
+    const email = dto.email.toLowerCase();
     const user = await this.userRepo.findOne({
-      where: { email: dto.email.toLowerCase() },
+      where: { email },
       relations: ['role', 'organization'],
       select: ['id', 'email', 'passwordHash', 'roleId', 'organizationId', 'createdAt'],
     });
-    if (!user) throw new UnauthorizedException('Invalid email or password');
+    if (!user) {
+      void this.activityLog?.log({
+        type: 'login_failed',
+        userEmail: email,
+        description: 'Login attempt — email not found',
+        ipAddress: meta?.ipAddress ?? null,
+        userAgent: meta?.userAgent ?? null,
+        isError: true,
+      });
+      throw new UnauthorizedException('Invalid email or password');
+    }
     const ok = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!ok) throw new UnauthorizedException('Invalid email or password');
+    if (!ok) {
+      void this.activityLog?.log({
+        type: 'login_failed',
+        userId: user.id,
+        userEmail: user.email,
+        userRole: user.role?.name ?? null,
+        organizationId: user.organizationId ?? null,
+        orgName: user.organization?.name ?? null,
+        description: 'Login attempt — wrong password',
+        ipAddress: meta?.ipAddress ?? null,
+        userAgent: meta?.userAgent ?? null,
+        isError: true,
+      });
+      throw new UnauthorizedException('Invalid email or password');
+    }
+    void this.activityLog?.log({
+      type: 'login',
+      userId: user.id,
+      userEmail: user.email,
+      userRole: user.role?.name ?? null,
+      organizationId: user.organizationId ?? null,
+      orgName: user.organization?.name ?? null,
+      description: `Logged in successfully`,
+      ipAddress: meta?.ipAddress ?? null,
+      userAgent: meta?.userAgent ?? null,
+      isError: false,
+    });
     return this.buildTokenResponse(user);
+  }
+
+  async logout(user: User, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
+    const lastLogin = await this.activityLog?.getLastLogin(user.id);
+    const durationMs = lastLogin ? Date.now() - new Date(lastLogin.createdAt).getTime() : null;
+    void this.activityLog?.log({
+      type: 'logout',
+      userId: user.id,
+      userEmail: user.email,
+      userRole: user.role?.name ?? null,
+      organizationId: user.organizationId ?? null,
+      orgName: user.organization?.name ?? null,
+      description: durationMs != null
+        ? `Session ended — ${formatSessionDuration(durationMs)}`
+        : 'Logged out',
+      durationMs,
+      ipAddress: meta?.ipAddress ?? null,
+      userAgent: meta?.userAgent ?? null,
+      isError: false,
+    });
+    return { message: 'Logged out successfully' };
   }
 
   async register(dto: RegisterDto) {
@@ -281,4 +341,14 @@ export class AuthService {
       expiresIn: accessMinutes,
     };
   }
+}
+
+function formatSessionDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }

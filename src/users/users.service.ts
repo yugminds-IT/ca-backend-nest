@@ -7,6 +7,7 @@ import { Role } from '../entities/role.entity';
 import { Organization } from '../entities/organization.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService {
@@ -66,6 +67,37 @@ export class UsersService {
       throw new ForbiddenException('Access denied');
     }
     return user;
+  }
+
+  async updateUser(id: number, dto: UpdateUserDto, currentUser: User): Promise<Partial<User>> {
+    const user = await this.userRepo.findOne({ where: { id }, relations: ['role', 'organization'] });
+    if (!user) throw new NotFoundException('User not found');
+    if (
+      currentUser.role?.name !== RoleName.MASTER_ADMIN &&
+      currentUser.organizationId !== user.organizationId
+    ) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    if (dto.name !== undefined) user.name = dto.name;
+    if (dto.phone !== undefined) user.phone = dto.phone;
+    await this.userRepo.save(user);
+
+    const updated = await this.userRepo.findOne({
+      where: { id },
+      relations: ['role', 'organization'],
+      select: ['id', 'email', 'name', 'phone', 'roleId', 'organizationId', 'createdAt'],
+    });
+    return updated!;
+  }
+
+  async deleteUser(id: number, currentUser: User): Promise<void> {
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      throw new ForbiddenException('Only master admin can delete users');
+    }
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    await this.userRepo.remove(user);
   }
 
   async createEmployee(dto: CreateEmployeeDto, currentUser: User): Promise<Partial<User>> {

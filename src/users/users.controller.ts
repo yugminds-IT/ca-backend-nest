@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards, ParseIntPipe, HttpCode, HttpStatus } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -32,5 +33,20 @@ export class UsersController {
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
   findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.users.findOne(id, user);
+  }
+
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN)
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto, @CurrentUser() user: User) {
+    return this.users.updateUser(id, dto, user);
+  }
+
+  @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles(RoleName.MASTER_ADMIN)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.users.deleteUser(id, user);
   }
 }
