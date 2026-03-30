@@ -19,6 +19,8 @@ import { ClientFilesModule } from './client-files/client-files.module';
 import { EmailTemplatesModule } from './email-templates/email-templates.module';
 import { MailManagementModule } from './mail-management/mail-management.module';
 import { MasterAdminModule } from './master-admin/master-admin.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { Role } from './entities/role.entity';
 import { Organization } from './entities/organization.entity';
@@ -32,6 +34,7 @@ import { ClientFile } from './entities/client-file.entity';
 import { EmailTemplate } from './entities/email-template.entity';
 import { EmailSchedule } from './entities/email-schedule.entity';
 import { ActivityLog } from './entities/activity-log.entity';
+import { Notification } from './entities/notification.entity';
 
 @Module({
   imports: [
@@ -40,7 +43,7 @@ import { ActivityLog } from './entities/activity-log.entity';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, ActivityLog],
+      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, ActivityLog, Notification],
       synchronize: false,
       logging: false,
       retryAttempts: 5,
@@ -71,6 +74,8 @@ import { ActivityLog } from './entities/activity-log.entity';
     EmailTemplatesModule,
     MailManagementModule,
     MasterAdminModule,
+    NotificationsModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [

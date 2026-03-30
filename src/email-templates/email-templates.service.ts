@@ -167,6 +167,8 @@ export class EmailTemplatesService {
       const org = await this.organizationRepo.findOne({ where: { id: currentUser.organizationId } });
       enriched.org_name = org?.name ?? '';
       enriched.org_admin_name = currentUser.name ?? currentUser.email ?? '';
+      enriched.org_email = currentUser.email ?? '';
+      enriched.org_phone = currentUser.phone ?? '';
       fromName = currentUser.name ?? currentUser.email;
     }
 
@@ -194,6 +196,7 @@ export class EmailTemplatesService {
       this.scheduleRepo.create({
         templateId: templateIdOrNull ?? null,
         subject: templateIdOrNull == null ? subject : null,
+        body: templateIdOrNull == null ? (customBody?.trim() ?? null) : null,
         recipientEmails: [to],
         variables: Object.keys(enriched).length > 0 ? enriched : null,
         scheduledAt: now,
@@ -205,6 +208,21 @@ export class EmailTemplatesService {
     );
 
     return { sent };
+  }
+
+  /** Internal: send one custom (no template) email with variable substitution. Used by schedule processor. */
+  async sendCustomInternal(
+    to: string,
+    subject: string,
+    body: string,
+    variables: Record<string, string> = {},
+    fromName?: string,
+  ): Promise<boolean> {
+    const resolvedSubject = this.substituteVariables(subject, variables);
+    const resolvedBody = this.substituteVariables(body, variables);
+    const html = this.toProfessionalHtml(resolvedSubject, resolvedBody);
+    const text = resolvedBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return this.emailService.sendMail(to, resolvedSubject, text, html, fromName);
   }
 
   /** Internal: send one email using template + variables (no user check). Used by schedule processor. */

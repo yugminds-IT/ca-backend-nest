@@ -156,35 +156,101 @@ export class MailManagementService {
     return this.emailTemplatesService.findAllForSending(currentUser);
   }
 
+  /** Normalise a day name/abbr to 0-6 (Sun=0 … Sat=6). Returns -1 if unrecognised. */
+  private parseDayName(raw: string): number {
+    const DAY_MAP: Record<string, number> = {
+      sun: 0, sunday: 0,
+      mon: 1, monday: 1,
+      tue: 2, tues: 2, tuesday: 2,
+      wed: 3, wednesday: 3,
+      thu: 4, thur: 4, thurs: 4, thursday: 4,
+      fri: 5, friday: 5,
+      sat: 6, saturday: 6,
+    };
+    return DAY_MAP[raw.toLowerCase().trim()] ?? -1;
+  }
+
   /** Expand schedule config to list of { date, time } slots */
   private expandScheduleToSlots(schedule: ScheduleEmailDto['schedule']): { date: string; time: string }[] {
     const slots: { date: string; time: string }[] = [];
     const times = schedule.times.filter((t) => t && String(t).trim());
     if (!times.length) return slots;
 
+    const pushDate = (dateStr: string) => {
+      for (const time of times) slots.push({ date: dateStr, time: time.trim() });
+    };
+
     if (schedule.type === 'single_date' && schedule.date) {
-      for (const time of times) slots.push({ date: schedule.date!, time: time.trim() });
+      pushDate(schedule.date);
       return slots;
     }
+
     if (schedule.type === 'date_range' && schedule.fromDate && schedule.toDate) {
       const from = new Date(schedule.fromDate);
       const to = new Date(schedule.toDate);
       if (from > to) return slots;
-      const current = new Date(from);
-      while (current <= to) {
-        const dateStr = current.toISOString().slice(0, 10);
-        for (const time of times) slots.push({ date: dateStr, time: time.trim() });
-        current.setDate(current.getDate() + 1);
-      }
+      const cur = new Date(from);
+      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1); }
       return slots;
     }
+
     if (schedule.type === 'multiple_dates' && schedule.dates?.length) {
-      for (const date of schedule.dates) {
-        if (!date) continue;
-        for (const time of times) slots.push({ date: date.trim(), time: time.trim() });
+      for (const date of schedule.dates) { if (date) pushDate(date.trim()); }
+      return slots;
+    }
+
+    // ── daily: every day in range ──
+    if (schedule.type === 'daily' && schedule.fromDate && schedule.toDate) {
+      const from = new Date(schedule.fromDate);
+      const to = new Date(schedule.toDate);
+      if (from > to) return slots;
+      const cur = new Date(from);
+      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1); }
+      return slots;
+    }
+
+    // ── weekly: every week on specified day(s) ──
+    if (schedule.type === 'weekly' && schedule.fromDate && schedule.toDate) {
+      const from = new Date(schedule.fromDate);
+      const to = new Date(schedule.toDate);
+      if (from > to) return slots;
+      // Parse requested weekdays; default to all 7 if none given
+      const targetDays: Set<number> = schedule.days?.length
+        ? new Set(schedule.days.map((d) => this.parseDayName(d)).filter((n) => n >= 0))
+        : new Set([0, 1, 2, 3, 4, 5, 6]);
+      if (!targetDays.size) return slots;
+      const cur = new Date(from);
+      while (cur <= to) {
+        if (targetDays.has(cur.getDay())) pushDate(cur.toISOString().slice(0, 10));
+        cur.setDate(cur.getDate() + 1);
       }
       return slots;
     }
+
+    // ── monthly: same day each month in range ──
+    if (schedule.type === 'monthly' && schedule.fromDate && schedule.toDate) {
+      const from = new Date(schedule.fromDate);
+      const to = new Date(schedule.toDate);
+      if (from > to) return slots;
+      const dom = schedule.dayOfMonth ?? from.getDate(); // default to fromDate's day
+      const clamp = (d: Date, day: number) => {
+        // clamp to last day of month if day > month length
+        const max = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+        return Math.min(day, max);
+      };
+      let year = from.getFullYear();
+      let month = from.getMonth();
+      while (true) {
+        const actualDay = clamp(new Date(year, month, 1), dom);
+        const candidate = new Date(year, month, actualDay);
+        if (candidate > to) break;
+        if (candidate >= from) pushDate(candidate.toISOString().slice(0, 10));
+        month++;
+        if (month > 11) { month = 0; year++; }
+      }
+      return slots;
+    }
+
     return slots;
   }
 
@@ -213,16 +279,24 @@ export class MailManagementService {
   }
 
   async createSchedule(dto: ScheduleEmailDto, currentUser: User): Promise<{ created: number; schedules: EmailSchedule[] }> {
-    const template = await this.templateRepo.findOne({ where: { id: dto.templateId } });
-    if (!template) throw new NotFoundException('Template not found');
-    if (!this.canUseTemplateForSending(currentUser, template)) {
-      throw new ForbiddenException('You can only send using your allowed templates (master: global only; org: global or org templates)');
+    let templateRef: EmailTemplate | null = null;
+    if (dto.templateId != null) {
+      templateRef = await this.templateRepo.findOne({ where: { id: dto.templateId } });
+      if (!templateRef) throw new NotFoundException('Template not found');
+      if (!this.canUseTemplateForSending(currentUser, templateRef)) {
+        throw new ForbiddenException('You can only send using your allowed templates (master: global only; org: global or org templates)');
+      }
+    } else {
+      if (!dto.subject?.trim()) throw new BadRequestException('subject is required for custom scheduled emails');
+      if (!dto.body?.trim()) throw new BadRequestException('body is required for custom scheduled emails');
     }
 
     const slots = this.expandScheduleToSlots(dto.schedule);
     if (!slots.length) throw new BadRequestException('Schedule produced no date/time slots. Check date range and times.');
 
-    const organizationId = currentUser.role?.name === RoleName.MASTER_ADMIN ? template.organizationId : currentUser.organizationId;
+    const organizationId = currentUser.role?.name === RoleName.MASTER_ADMIN
+      ? (templateRef?.organizationId ?? null)
+      : currentUser.organizationId;
     const createdBy = currentUser.id;
     const recipientEmails = [...new Set(dto.recipientEmails)];
 
@@ -231,7 +305,9 @@ export class MailManagementService {
     for (const slot of slots) {
       const scheduledAt = this.slotToScheduledAt(slot.date, slot.time, timeZoneOffset);
       const schedule = this.scheduleRepo.create({
-        templateId: dto.templateId,
+        templateId: dto.templateId ?? null,
+        subject: dto.templateId == null ? dto.subject!.trim() : null,
+        body: dto.templateId == null ? dto.body!.trim() : null,
         recipientEmails,
         variables: dto.variables ?? null,
         scheduledAt,
@@ -267,6 +343,24 @@ export class MailManagementService {
     return schedule;
   }
 
+  async updateSchedule(
+    id: number,
+    dto: { scheduledAt?: string; recipientEmails?: string[]; variables?: Record<string, string> },
+    currentUser: User,
+  ): Promise<EmailSchedule> {
+    const schedule = await this.getSchedule(id, currentUser);
+    if (schedule.status !== 'pending')
+      throw new BadRequestException('Only pending schedules can be edited');
+    if (dto.scheduledAt != null) {
+      const d = new Date(dto.scheduledAt);
+      if (isNaN(d.getTime())) throw new BadRequestException('Invalid scheduledAt value');
+      schedule.scheduledAt = d;
+    }
+    if (dto.recipientEmails != null) schedule.recipientEmails = dto.recipientEmails;
+    if (dto.variables != null) schedule.variables = dto.variables;
+    return this.scheduleRepo.save(schedule);
+  }
+
   async cancelSchedule(id: number, currentUser: User): Promise<EmailSchedule> {
     const schedule = await this.getSchedule(id, currentUser);
     if (schedule.status !== 'pending') throw new BadRequestException('Only pending schedules can be cancelled');
@@ -295,14 +389,26 @@ export class MailManagementService {
     let sent = 0;
     let failed = 0;
     for (const schedule of pending) {
-      const template = schedule.template;
-      if (!template) {
+      const isCustom = schedule.templateId == null;
+
+      // Custom email: needs stored subject + body
+      if (isCustom && (!schedule.subject?.trim() || !schedule.body?.trim())) {
+        schedule.status = 'failed';
+        schedule.errorMessage = 'Custom email missing subject or body';
+        await this.scheduleRepo.save(schedule);
+        failed++;
+        continue;
+      }
+
+      // Template email: needs a valid template
+      if (!isCustom && !schedule.template) {
         schedule.status = 'failed';
         schedule.errorMessage = 'Template not found';
         await this.scheduleRepo.save(schedule);
         failed++;
         continue;
       }
+
       const variables = { ...(schedule.variables ?? {}) };
       let fromName: string | undefined;
       if (schedule.organizationId != null) {
@@ -313,31 +419,50 @@ export class MailManagementService {
           .innerJoin('u.role', 'r')
           .where('u.organizationId = :orgId', { orgId: schedule.organizationId })
           .andWhere('r.name = :roleName', { roleName: RoleName.ORG_ADMIN })
-          .select(['u.id', 'u.name', 'u.email'])
+          .select(['u.id', 'u.name', 'u.email', 'u.phone'])
           .getOne();
         if (orgAdmin) {
           variables.org_admin_name = orgAdmin.name ?? orgAdmin.email ?? '';
+          variables.org_email = orgAdmin.email ?? '';
+          variables.org_phone = (orgAdmin as any).phone ?? '';
           fromName = orgAdmin.name ?? orgAdmin.email;
         } else {
           const creator = await this.userRepo.findOne({
             where: { id: schedule.createdBy },
-            select: ['id', 'name', 'email'],
+            select: ['id', 'name', 'email', 'phone'],
           });
           variables.org_admin_name = creator?.name ?? creator?.email ?? '';
+          variables.org_email = creator?.email ?? '';
+          variables.org_phone = creator?.phone ?? '';
           fromName = creator?.name ?? creator?.email;
         }
       }
+
       let anySent = false;
       let lastError: string | null = null;
       for (let i = 0; i < schedule.recipientEmails.length; i++) {
         if (i > 0) await delay(DELAY_BETWEEN_EMAILS_MS);
         const to = schedule.recipientEmails[i];
         try {
-          const ok = await this.emailTemplatesService.sendWithTemplateInternal(to, template, variables, fromName);
-          if (ok) {
-            sent++;
-            anySent = true;
-          } else lastError = 'Send returned false';
+          let ok: boolean;
+          if (isCustom) {
+            ok = await this.emailTemplatesService.sendCustomInternal(
+              to,
+              schedule.subject!,
+              schedule.body!,
+              variables,
+              fromName,
+            );
+          } else {
+            ok = await this.emailTemplatesService.sendWithTemplateInternal(
+              to,
+              schedule.template!,
+              variables,
+              fromName,
+            );
+          }
+          if (ok) { sent++; anySent = true; }
+          else lastError = 'Send returned false';
         } catch (e) {
           lastError = e instanceof Error ? e.message : String(e);
           failed++;

@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -8,6 +8,7 @@ import { Client } from '../entities/client.entity';
 import { ClientFile } from '../entities/client-file.entity';
 import { S3Service } from '../s3/s3.service';
 import { RoleName } from '../common/enums/role.enum';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const ORG_ROLES = [RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE];
 
@@ -53,6 +54,7 @@ export class ClientFilesService {
     @InjectRepository(Client)
     private clientRepo: Repository<Client>,
     private s3: S3Service,
+    @Optional() private notificationsService?: NotificationsService,
   ) {}
 
   private async getClientId(user: User): Promise<number> {
@@ -116,6 +118,21 @@ export class ClientFilesService {
         time,
         downloadUrl,
       });
+
+      // Fire-and-forget: create notification for org admin
+      const client = await this.clientRepo.findOne({ where: { id: clientId } });
+      if (client?.organizationId && this.notificationsService) {
+        void this.notificationsService.create({
+          type: 'document_upload',
+          organizationId: client.organizationId,
+          clientId,
+          clientName: client.name,
+          fileName: record.fileName,
+          fileType: documentType ?? ext,
+          fileSize: file.size,
+          message: `${client.name} uploaded a document: ${record.fileName}`,
+        });
+      }
     }
     return results;
   }

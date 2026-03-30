@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Delete,
@@ -17,6 +18,7 @@ import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { MailManagementService } from './mail-management.service';
 import { ScheduleEmailDto } from './dto/schedule-email.dto';
+import { UpdateScheduleDto } from './dto/update-schedule.dto';
 
 @Controller('mail-management')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -63,6 +65,15 @@ export class MailManagementController {
   @Get('schedules/:id')
   getSchedule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.service.getSchedule(id, user);
+  }
+
+  @Patch('schedules/:id')
+  updateSchedule(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateScheduleDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.service.updateSchedule(id, dto, user);
   }
 
   @Delete('schedules/:id')

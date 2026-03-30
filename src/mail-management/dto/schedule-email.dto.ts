@@ -7,25 +7,25 @@ import {
   IsObject,
   IsIn,
   ArrayMinSize,
-  MinLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ScheduleSlotDto {
-  @IsIn(['single_date', 'date_range', 'multiple_dates'])
-  type: 'single_date' | 'date_range' | 'multiple_dates';
+  @IsIn(['single_date', 'date_range', 'multiple_dates', 'daily', 'weekly', 'monthly'])
+  type: 'single_date' | 'date_range' | 'multiple_dates' | 'daily' | 'weekly' | 'monthly';
 
   /** For single_date: YYYY-MM-DD */
   @IsOptional()
   @IsString()
   date?: string;
 
-  /** For date_range */
+  /** For date_range / daily / weekly / monthly: start date YYYY-MM-DD */
   @IsOptional()
   @IsString()
   fromDate?: string;
 
+  /** For date_range / daily / weekly / monthly: end date YYYY-MM-DD */
   @IsOptional()
   @IsString()
   toDate?: string;
@@ -36,21 +36,53 @@ export class ScheduleSlotDto {
   @IsString({ each: true })
   dates?: string[];
 
-  /** Times like "09:00", "14:00" (single time = one element) — interpreted in timeZoneOffset if provided */
+  /**
+   * For weekly: day names to send on.
+   * Accepts any common abbreviation or full name, case-insensitive:
+   * mon/monday, tue/tues/tuesday, wed/wednesday, thu/thur/thurs/thursday,
+   * fri/friday, sat/saturday, sun/sunday.
+   * Defaults to all 7 days if omitted.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  days?: string[];
+
+  /**
+   * For monthly: day of the month to send (1–31).
+   * Defaults to the day of fromDate if omitted.
+   */
+  @IsOptional()
+  @IsNumber()
+  dayOfMonth?: number;
+
+  /** Times like "09:00", "14:00" — interpreted in timeZoneOffset if provided */
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })
   times: string[];
 
-  /** User's timezone offset for local time (e.g. "+05:30", "-08:00"). If set, date+time are interpreted in this zone and stored as UTC. */
+  /** User's timezone offset (e.g. "+05:30", "-08:00"). Converts local time to UTC. */
   @IsOptional()
   @IsString()
   timeZoneOffset?: string;
 }
 
 export class ScheduleEmailDto {
+  /** Required for template-based scheduling; omit for custom emails */
+  @IsOptional()
   @IsNumber()
-  templateId: number;
+  templateId?: number;
+
+  /** Subject — required when no templateId */
+  @IsOptional()
+  @IsString()
+  subject?: string;
+
+  /** Body HTML — required when no templateId */
+  @IsOptional()
+  @IsString()
+  body?: string;
 
   @IsArray()
   @ArrayMinSize(1)

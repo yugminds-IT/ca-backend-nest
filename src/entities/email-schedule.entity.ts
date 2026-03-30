@@ -25,6 +25,10 @@ export class EmailSchedule {
   @Column({ type: 'varchar', length: 500, nullable: true })
   subject: string | null;
 
+  /** Body HTML — populated for custom emails (no template) */
+  @Column({ type: 'text', nullable: true })
+  body: string | null;
+
   @Column({ type: 'jsonb', name: 'recipientEmails' })
   recipientEmails: string[];
 

@@ -1,4 +1,5 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException, Optional, ForbiddenException } from '@nestjs/common';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -307,6 +308,20 @@ export class AuthService {
     await this.userRepo.save(user);
     await this.otpRepo.delete({ email: normalized, type: 'password_reset' });
     return { message: 'Password updated successfully. You can now login with your new password.' };
+  }
+
+  async updateProfile(userId: number, dto: UpdateProfileDto): Promise<Partial<User>> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (dto.name !== undefined) user.name = dto.name;
+    if (dto.phone !== undefined) user.phone = dto.phone;
+    await this.userRepo.save(user);
+    const updated = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: ['role', 'organization'],
+      select: ['id', 'email', 'name', 'phone', 'roleId', 'organizationId', 'createdAt'],
+    });
+    return updated!;
   }
 
   private buildTokenResponse(user: User) {
