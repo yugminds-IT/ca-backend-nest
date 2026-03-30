@@ -15,4 +15,14 @@ export class UpdateScheduleDto {
   @IsOptional()
   @IsObject()
   variables?: Record<string, string>;
+
+  /** Subject line (only for custom emails, not template-based) */
+  @IsOptional()
+  @IsString()
+  subject?: string;
+
+  /** HTML body (only for custom emails, not template-based) */
+  @IsOptional()
+  @IsString()
+  body?: string;
 }

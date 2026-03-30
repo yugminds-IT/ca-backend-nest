@@ -345,7 +345,7 @@ export class MailManagementService {
 
   async updateSchedule(
     id: number,
-    dto: { scheduledAt?: string; recipientEmails?: string[]; variables?: Record<string, string> },
+    dto: { scheduledAt?: string; recipientEmails?: string[]; variables?: Record<string, string>; subject?: string; body?: string },
     currentUser: User,
   ): Promise<EmailSchedule> {
     const schedule = await this.getSchedule(id, currentUser);
@@ -358,6 +358,8 @@ export class MailManagementService {
     }
     if (dto.recipientEmails != null) schedule.recipientEmails = dto.recipientEmails;
     if (dto.variables != null) schedule.variables = dto.variables;
+    if (dto.subject != null && schedule.templateId == null) schedule.subject = dto.subject;
+    if (dto.body != null && schedule.templateId == null) schedule.body = dto.body;
     return this.scheduleRepo.save(schedule);
   }
 
