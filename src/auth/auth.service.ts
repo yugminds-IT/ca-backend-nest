@@ -36,7 +36,7 @@ export class AuthService {
     private jwtService: JwtService,
     private emailService: EmailService,
     @Optional() private activityLog?: ActivityLogService,
-  ) {}
+  ) { }
 
   async login(dto: LoginDto, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
     const email = dto.email.toLowerCase();
@@ -288,6 +288,20 @@ export class AuthService {
     await this.otpRepo.save(this.otpRepo.create({ email: normalized, otp, type: 'password_reset', expiresAt }));
     await this.emailService.sendOtp(normalized, otp);
     return { message: 'If an account exists with this email, you will receive an OTP shortly.' };
+  }
+
+  async verifyPasswordResetOtp(email: string, otp: string): Promise<{ message: string; verified: boolean }> {
+    const normalized = email.toLowerCase();
+    const record = await this.otpRepo.findOne({
+      where: { email: normalized, type: 'password_reset', otp },
+      order: { createdAt: 'DESC' },
+    });
+    if (!record) throw new BadRequestException('Invalid or expired OTP');
+    if (new Date() > record.expiresAt) {
+      await this.otpRepo.remove(record);
+      throw new BadRequestException('OTP has expired');
+    }
+    return { message: 'OTP verified successfully.', verified: true };
   }
 
   async resetPassword(email: string, otp: string, newPassword: string): Promise<{ message: string }> {

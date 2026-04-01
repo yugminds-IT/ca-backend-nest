@@ -9,6 +9,7 @@ import { MasterAdminSignupDto } from './dto/master-admin-signup.dto';
 import { OrganizationSignupDto } from './dto/organization-signup.dto';
 import { OrgAdminSignupDto } from './dto/org-admin-signup.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -17,7 +18,7 @@ import { User } from '../entities/user.entity';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private auth: AuthService) {}
+  constructor(private auth: AuthService) { }
 
   @Public()
   @Post('login')
@@ -81,6 +82,12 @@ export class AuthController {
   @Post('forgot-password')
   forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.auth.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Post('verify-password-reset-otp')
+  verifyPasswordResetOtp(@Body() dto: VerifyOtpDto) {
+    return this.auth.verifyPasswordResetOtp(dto.email, dto.otp);
   }
 
   @Public()
