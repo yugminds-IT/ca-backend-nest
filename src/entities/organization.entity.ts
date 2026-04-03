@@ -32,6 +32,25 @@ export class Organization {
   @Column({ type: 'varchar', length: 20, nullable: true })
   pincode: string | null;
 
+  // Per-org SMTP configuration (optional — falls back to global SMTP when null)
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  smtpHost: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  smtpPort: number | null;
+
+  @Column({ type: 'boolean', nullable: true })
+  smtpSecure: boolean | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  smtpUser: string | null;
+
+  @Column({ type: 'varchar', length: 1000, nullable: true })
+  smtpPass: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  smtpFrom: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

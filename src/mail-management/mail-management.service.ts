@@ -454,6 +454,7 @@ export class MailManagementService {
               schedule.body!,
               variables,
               fromName,
+              schedule.organizationId ?? undefined,
             );
           } else {
             ok = await this.emailTemplatesService.sendWithTemplateInternal(
@@ -461,6 +462,7 @@ export class MailManagementService {
               schedule.template!,
               variables,
               fromName,
+              schedule.organizationId ?? undefined,
             );
           }
           if (ok) { sent++; anySent = true; }

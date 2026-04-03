@@ -189,7 +189,7 @@ export class EmailTemplatesService {
       text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    const sent = await this.emailService.sendMail(to, subject, text, html, fromName);
+    const sent = await this.emailService.sendMail(to, subject, text, html, fromName, currentUser.organizationId ?? undefined);
 
     const now = new Date();
     await this.scheduleRepo.save(
@@ -217,12 +217,13 @@ export class EmailTemplatesService {
     body: string,
     variables: Record<string, string> = {},
     fromName?: string,
+    orgId?: number,
   ): Promise<boolean> {
     const resolvedSubject = this.substituteVariables(subject, variables);
     const resolvedBody = this.substituteVariables(body, variables);
     const html = this.toProfessionalHtml(resolvedSubject, resolvedBody);
     const text = resolvedBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return this.emailService.sendMail(to, resolvedSubject, text, html, fromName);
+    return this.emailService.sendMail(to, resolvedSubject, text, html, fromName, orgId);
   }
 
   /** Internal: send one email using template + variables (no user check). Used by schedule processor. */
@@ -231,12 +232,13 @@ export class EmailTemplatesService {
     template: EmailTemplate,
     variables: Record<string, string> = {},
     fromName?: string,
+    orgId?: number,
   ): Promise<boolean> {
     const subject = this.substituteVariables(template.subject, variables);
     const body = this.substituteVariables(template.body, variables);
     const html = this.toProfessionalHtml(subject, body);
     const text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return this.emailService.sendMail(to, subject, text, html, fromName);
+    return this.emailService.sendMail(to, subject, text, html, fromName, orgId);
   }
 
   /** Replace {{key}} with values. Variables object uses keys without braces, e.g. client_name. */
