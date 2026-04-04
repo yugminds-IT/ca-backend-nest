@@ -191,7 +191,9 @@ export class OrganizationsService {
     try {
       pass = decrypt(org.smtpPass, this.getEncryptionKey());
     } catch {
-      throw new BadRequestException('Failed to decrypt stored SMTP password');
+      throw new BadRequestException(
+        'SMTP password could not be decrypted — this usually means SMTP_ENCRYPTION_KEY changed after the config was saved. Re-save your SMTP configuration to fix this.',
+      );
     }
 
     try {

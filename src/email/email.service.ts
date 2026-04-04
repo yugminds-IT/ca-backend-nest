@@ -69,7 +69,10 @@ export class EmailService {
         });
         this.transporterCache.set(orgId, transporter);
       } catch (err) {
-        this.logger.error(`Failed to create transporter for org ${orgId}:`, err);
+        this.logger.error(
+          `Failed to create transporter for org ${orgId} — SMTP password may need re-saving if SMTP_ENCRYPTION_KEY changed:`,
+          err,
+        );
         return null;
       }
     }
