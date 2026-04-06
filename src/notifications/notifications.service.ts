@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, LessThan } from 'typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Notification } from '../entities/notification.entity';
 
 export interface CreateNotificationData {
@@ -16,10 +17,22 @@ export interface CreateNotificationData {
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     @InjectRepository(Notification)
     private repo: Repository<Notification>,
   ) {}
+
+  /** Runs every hour — deletes notifications older than 24 hours. */
+  @Cron(CronExpression.EVERY_HOUR)
+  async purgeOldNotifications(): Promise<void> {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const result = await this.repo.delete({ createdAt: LessThan(cutoff) });
+    if ((result.affected ?? 0) > 0) {
+      this.logger.log(`Purged ${result.affected} notification(s) older than 24 hours`);
+    }
+  }
 
   async create(data: CreateNotificationData): Promise<Notification> {
     return this.repo.save(

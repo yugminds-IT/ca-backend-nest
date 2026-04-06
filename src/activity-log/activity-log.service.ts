@@ -13,12 +13,14 @@ export class ActivityLogService {
     private readonly repo: Repository<ActivityLog>,
   ) {}
 
-  /** Runs every day at midnight — deletes logs older than 3 days. */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  /** Runs every hour — deletes activity logs older than 48 hours. */
+  @Cron(CronExpression.EVERY_HOUR)
   async purgeOldLogs(): Promise<void> {
-    const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const result = await this.repo.delete({ createdAt: LessThan(cutoff) });
-    this.logger.log(`Purged ${result.affected ?? 0} activity log(s) older than 3 days`);
+    if ((result.affected ?? 0) > 0) {
+      this.logger.log(`Purged ${result.affected} activity log(s) older than 48 hours`);
+    }
   }
 
   /** Create a log entry. Never throws — logging must not break the main request. */
