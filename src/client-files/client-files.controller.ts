@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -41,6 +42,25 @@ export class ClientFilesController {
     return this.clientFiles.uploadFiles(files, user, documentType);
   }
 
+  /** Org users: upload files for a specific client. */
+  @Post('upload-for-client/:clientId')
+  @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: 'files', maxCount: 20 }]),
+  )
+  uploadForClient(
+    @Param('clientId', ParseIntPipe) clientId: number,
+    @UploadedFiles() uploaded: { files?: Express.Multer.File[] },
+    @CurrentUser() user: User,
+    @Body('type') documentType?: string,
+  ) {
+    const files = uploaded?.files ?? [];
+    if (!files.length) {
+      return { message: 'No files uploaded', data: [] };
+    }
+    return this.clientFiles.uploadFilesForClient(files, clientId, user, documentType);
+  }
+
   /** Client only: list own uploaded files. */
   @Get()
   @Roles(RoleName.CLIENT)
@@ -60,5 +80,12 @@ export class ClientFilesController {
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE, RoleName.CLIENT)
   getDownloadUrl(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.clientFiles.getDownloadUrl(id, user);
+  }
+
+  /** Client or org user: delete a file. */
+  @Delete(':id')
+  @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE, RoleName.CLIENT)
+  deleteFile(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.clientFiles.deleteFile(id, user);
   }
 }
