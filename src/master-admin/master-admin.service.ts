@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, MoreThanOrEqual } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { Organization } from '../entities/organization.entity';
 import { EmailTemplate } from '../entities/email-template.entity';
 import { EmailSchedule } from '../entities/email-schedule.entity';
+import { EmailService } from '../email/email.service';
+import { RoleName } from '../common/enums/role.enum';
 
 @Injectable()
 export class MasterAdminService {
@@ -17,6 +19,7 @@ export class MasterAdminService {
     private templateRepo: Repository<EmailTemplate>,
     @InjectRepository(EmailSchedule)
     private scheduleRepo: Repository<EmailSchedule>,
+    private emailService: EmailService,
   ) {}
 
   // ─── Stats ────────────────────────────────────────────────────────────────
@@ -237,6 +240,95 @@ export class MasterAdminService {
     );
 
     return [header, ...rows].join('\n');
+  }
+
+  // ─── Organization approval & access ───────────────────────────────────────
+
+  async listPendingOrganizations(): Promise<Organization[]> {
+    return this.orgRepo.find({
+      where: { approvalStatus: 'pending' },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  async approveOrganization(id: number): Promise<Organization> {
+    const org = await this.orgRepo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organization not found');
+    if (org.approvalStatus !== 'pending') {
+      throw new BadRequestException('Only pending organizations can be approved');
+    }
+    const trialDays = parseInt(process.env.ORG_TRIAL_DAYS ?? '7', 10);
+    const accessUntil = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000);
+    org.approvalStatus = 'approved';
+    org.approvedAt = new Date();
+    org.accessUntil = accessUntil;
+    await this.orgRepo.save(org);
+
+    const admin = await this.userRepo
+      .createQueryBuilder('u')
+      .leftJoin('u.role', 'r')
+      .where('u.organizationId = :oid', { oid: id })
+      .andWhere('r.name = :rname', { rname: RoleName.ORG_ADMIN })
+      .orderBy('u.id', 'ASC')
+      .getOne();
+
+    if (admin?.email) {
+      void this.emailService.sendOrganizationApprovedToAdmin({
+        adminEmail: admin.email,
+        organizationName: org.name,
+        accessUntil,
+      });
+    }
+
+    return org;
+  }
+
+  async rejectOrganization(id: number): Promise<{ message: string }> {
+    const org = await this.orgRepo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organization not found');
+    if (org.approvalStatus !== 'pending') {
+      throw new BadRequestException('Only pending organizations can be rejected');
+    }
+    org.approvalStatus = 'rejected';
+    await this.orgRepo.save(org);
+    return { message: 'Organization registration rejected.' };
+  }
+
+  async extendOrganizationAccess(id: number, accessUntil: Date): Promise<Organization> {
+    if (Number.isNaN(accessUntil.getTime())) {
+      throw new BadRequestException('Invalid accessUntil date');
+    }
+    const org = await this.orgRepo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organization not found');
+    org.approvalStatus = 'approved';
+    org.accessUntil = accessUntil;
+    if (!org.approvedAt) org.approvedAt = new Date();
+    await this.orgRepo.save(org);
+    return org;
+  }
+
+  /** Daily cron: email team a list of pending org signups (from Lekvya). */
+  async sendDailyPendingDigestEmail(): Promise<void> {
+    const pending = await this.orgRepo.find({
+      where: { approvalStatus: 'pending' },
+      order: { createdAt: 'ASC' },
+    });
+    const lines: { orgName: string; adminEmail: string; createdAt: Date }[] = [];
+    for (const org of pending) {
+      const admin = await this.userRepo
+        .createQueryBuilder('u')
+        .leftJoin('u.role', 'r')
+        .where('u.organizationId = :oid', { oid: org.id })
+        .andWhere('r.name = :rname', { rname: RoleName.ORG_ADMIN })
+        .orderBy('u.id', 'ASC')
+        .getOne();
+      lines.push({
+        orgName: org.name,
+        adminEmail: admin?.email ?? '—',
+        createdAt: org.createdAt,
+      });
+    }
+    await this.emailService.sendPendingOrganizationsDigestToTeam(lines);
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

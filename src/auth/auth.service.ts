@@ -18,6 +18,7 @@ import { OrgAdminSignupDto } from './dto/org-admin-signup.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { RoleName } from '../common/enums/role.enum';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { assertOrganizationAccess } from '../common/utils/org-access.util';
 
 const OTP_EXPIRY_MINUTES = 10;
 const OTP_LENGTH = 6;
@@ -40,16 +41,31 @@ export class AuthService {
 
   async login(dto: LoginDto, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
     const email = dto.email.toLowerCase();
-    const user = await this.userRepo.findOne({
-      where: { email },
-      relations: ['role', 'organization'],
-      select: ['id', 'email', 'passwordHash', 'roleId', 'organizationId', 'createdAt'],
-    });
+    // passwordHash has `select: false` on User — must addSelect or it is undefined here.
+    const user = await this.userRepo
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .leftJoinAndSelect('user.role', 'role')
+      .leftJoinAndSelect('user.organization', 'organization')
+      .where('user.email = :email', { email })
+      .getOne();
     if (!user) {
       void this.activityLog?.log({
         type: 'login_failed',
         userEmail: email,
         description: 'Login attempt — email not found',
+        ipAddress: meta?.ipAddress ?? null,
+        userAgent: meta?.userAgent ?? null,
+        isError: true,
+      });
+      throw new UnauthorizedException('Invalid email or password');
+    }
+    if (!user.passwordHash) {
+      void this.activityLog?.log({
+        type: 'login_failed',
+        userId: user.id,
+        userEmail: user.email,
+        description: 'Login attempt — account has no password set',
         ipAddress: meta?.ipAddress ?? null,
         userAgent: meta?.userAgent ?? null,
         isError: true,
@@ -72,6 +88,7 @@ export class AuthService {
       });
       throw new UnauthorizedException('Invalid email or password');
     }
+    assertOrganizationAccess(user);
     void this.activityLog?.log({
       type: 'login',
       userId: user.id,
@@ -153,6 +170,7 @@ export class AuthService {
       relations: ['role', 'organization'],
     });
     if (!user) throw new UnauthorizedException('User not found');
+    assertOrganizationAccess(user);
     return this.buildTokenResponse(user);
   }
 
@@ -197,6 +215,9 @@ export class AuthService {
         state: dto.organization.state ?? null,
         country: dto.organization.country ?? null,
         pincode: dto.organization.pincode ?? null,
+        approvalStatus: 'pending',
+        accessUntil: null,
+        approvedAt: null,
       }),
     );
     const role = await this.roleRepo.findOne({ where: { name: RoleName.ORG_ADMIN } });
@@ -212,11 +233,25 @@ export class AuthService {
         organizationId: org.id,
       }),
     );
-    const withRelations = await this.userRepo.findOne({
-      where: { id: user.id },
-      relations: ['role', 'organization'],
-    }) as User;
-    return this.buildTokenResponse(withRelations!);
+    void this.emailService.sendNewOrganizationSignupToTeam({
+      organizationName: org.name,
+      adminEmail: email,
+      adminName: dto.admin.name,
+      adminPhone: dto.admin.phone ?? null,
+    });
+    void this.emailService.sendNewOrganizationSignupPendingToAdmin({
+      adminEmail: email,
+      adminName: dto.admin.name,
+      organizationName: org.name,
+    });
+
+    return {
+      message:
+        'Registration received. Your account is pending approval — you cannot sign in until a master admin approves your organization. Check your email for confirmation.',
+      organizationId: org.id,
+      adminEmail: email,
+      approvalStatus: 'pending' as const,
+    };
   }
 
   async signupOrgAdmin(dto: OrgAdminSignupDto) {
@@ -247,6 +282,7 @@ export class AuthService {
 
   async getOrganizationsForDropdown(): Promise<{ id: number; name: string; city: string | null; state: string | null; country: string | null }[]> {
     return this.orgRepo.find({
+      where: { approvalStatus: 'approved' },
       select: ['id', 'name', 'city', 'state', 'country'],
       order: { name: 'ASC' },
     });

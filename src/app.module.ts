@@ -19,6 +19,7 @@ import { ClientFilesModule } from './client-files/client-files.module';
 import { EmailTemplatesModule } from './email-templates/email-templates.module';
 import { MailManagementModule } from './mail-management/mail-management.module';
 import { MasterAdminModule } from './master-admin/master-admin.module';
+import { ContactModule } from './contact/contact.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -38,7 +39,11 @@ import { Notification } from './entities/notification.entity';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      // Nest merges both files: `.env` values override the same keys in `.env.example`; keys only in `.env.example` are kept.
+      envFilePath: ['.env', '.env.example'],
+    }),
     ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       type: 'postgres',
@@ -74,6 +79,7 @@ import { Notification } from './entities/notification.entity';
     EmailTemplatesModule,
     MailManagementModule,
     MasterAdminModule,
+    ContactModule,
     NotificationsModule,
     DashboardModule,
   ],

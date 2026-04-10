@@ -1,6 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
+  Patch,
+  Post,
+  Param,
   Query,
   UseGuards,
   Res,
@@ -15,6 +19,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RoleName } from '../common/enums/role.enum';
 import { ActivityLogService } from '../activity-log/activity-log.service';
+import { ExtendOrgAccessDto } from './dto/extend-org-access.dto';
 
 @Controller('master-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -77,6 +82,30 @@ export class MasterAdminController {
       offset,
       since: since ? new Date(since) : undefined,
     }) ?? { logs: [], total: 0 };
+  }
+
+  /** Pending self-service organization signups (awaiting approval) */
+  @Get('organizations/pending')
+  listPendingOrganizations() {
+    return this.masterAdminService.listPendingOrganizations();
+  }
+
+  @Post('organizations/:id/approve')
+  approveOrganization(@Param('id', ParseIntPipe) id: number) {
+    return this.masterAdminService.approveOrganization(id);
+  }
+
+  @Post('organizations/:id/reject')
+  rejectOrganization(@Param('id', ParseIntPipe) id: number) {
+    return this.masterAdminService.rejectOrganization(id);
+  }
+
+  @Patch('organizations/:id/access')
+  extendOrganizationAccess(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ExtendOrgAccessDto,
+  ) {
+    return this.masterAdminService.extendOrganizationAccess(id, new Date(dto.accessUntil));
   }
 
   /** Export all organizations as CSV */

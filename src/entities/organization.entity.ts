@@ -51,6 +51,17 @@ export class Organization {
   @Column({ type: 'varchar', length: 255, nullable: true })
   smtpFrom: string | null;
 
+  /** Self-service signups start as `pending` until master admin approves. */
+  @Column({ type: 'varchar', length: 20, default: 'approved' })
+  approvalStatus: 'pending' | 'approved' | 'rejected';
+
+  /** When access ends (trial or extended subscription). Null means not set / legacy. */
+  @Column({ type: 'timestamptz', nullable: true })
+  accessUntil: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  approvedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

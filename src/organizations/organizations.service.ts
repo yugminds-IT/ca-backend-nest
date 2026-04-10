@@ -56,7 +56,16 @@ export class OrganizationsService {
       counter += 1;
       slug = `${baseSlug}-${counter}`;
     }
-    return this.repo.save(this.repo.create({ ...dto, slug }));
+    const tenYearsMs = 10 * 365 * 24 * 60 * 60 * 1000;
+    return this.repo.save(
+      this.repo.create({
+        ...dto,
+        slug,
+        approvalStatus: 'approved',
+        approvedAt: new Date(),
+        accessUntil: new Date(Date.now() + tenYearsMs),
+      }),
+    );
   }
 
   async findAll(currentUser: User): Promise<Organization[]> {

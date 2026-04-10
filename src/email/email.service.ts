@@ -7,6 +7,14 @@ import type { Transporter } from 'nodemailer';
 import { Organization } from '../entities/organization.entity';
 import { deriveKey, decrypt } from '../common/utils/crypto.util';
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 @Injectable()
 export class EmailService {
   private globalTransporter: Transporter | null = null;
@@ -18,9 +26,9 @@ export class EmailService {
     @InjectRepository(Organization)
     private orgRepo: Repository<Organization>,
   ) {
-    const host = this.config.get<string>('SMTP_HOST');
-    const user = this.config.get<string>('SMTP_USER');
-    const pass = this.config.get<string>('SMTP_PASS');
+    const host = this.config.get<string>('SMTP_HOST')?.trim();
+    const user = this.config.get<string>('SMTP_USER')?.trim();
+    const pass = this.config.get<string>('SMTP_PASS')?.trim();
     if (host && user && pass) {
       this.globalTransporter = nodemailer.createTransport({
         host,
@@ -28,7 +36,18 @@ export class EmailService {
         secure: this.config.get<string>('SMTP_SECURE') === 'true',
         auth: { user, pass },
       });
+      this.logger.log(`Global SMTP: ${host} (user ${this.maskEmail(user)})`);
+    } else {
+      this.logger.warn(
+        'Global SMTP not configured (SMTP_HOST/SMTP_USER/SMTP_PASS missing) — transactional emails will fail or be skipped.',
+      );
     }
+  }
+
+  private maskEmail(email: string): string {
+    const [a, d] = email.split('@');
+    if (!d) return '***';
+    return `${(a ?? '').slice(0, 2)}***@${d}`;
   }
 
   private get globalFrom(): string {
@@ -124,8 +143,18 @@ export class EmailService {
       });
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return true;
-    } catch (err) {
+    } catch (err: unknown) {
       this.logger.error(`Failed to send email to ${to}:`, err);
+      const e = err as { code?: string; responseCode?: number };
+      if (e?.code === 'EAUTH' || e?.responseCode === 535) {
+        const scope =
+          orgId != null
+            ? `organization SMTP (org id ${orgId} — check saved SMTP in DB / org settings; wrong password or encryption key)`
+            : `global SMTP in .env (not a database error — fix SMTP_USER/SMTP_PASS; Hostinger needs the mailbox password for ${this.config.get<string>('SMTP_USER')?.includes('@') ? 'that email' : 'SMTP_USER'})`;
+        this.logger.warn(
+          `SMTP login rejected (535). ${scope}. See Hostinger hPanel → Email → manage mailbox password.`,
+        );
+      }
       return false;
     }
   }
@@ -150,6 +179,189 @@ export class EmailService {
       <p>Keep this email secure and do not share your password.</p>
     `;
     return this.sendMail(email, subject, text, html, undefined, orgId);
+  }
+
+  /** Default recipients for Lekvya team notifications (contact form, signups, digests). */
+  private getTeamRecipientEmails(): string[] {
+    const fromEnv = this.config.get<string>('CONTACT_TEAM_EMAILS');
+    if (fromEnv?.trim()) {
+      return fromEnv
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean);
+    }
+    return [
+      'navedhanaprofitamplifier@gmail.com',
+      'mettumanith0@gmail.com',
+      'likithkarnekota@gmail.com',
+      'omprakesh16003@gmail.com',
+    ];
+  }
+
+  async sendMailToTeam(
+    subject: string,
+    text: string,
+    html?: string,
+  ): Promise<boolean> {
+    const recipients = this.getTeamRecipientEmails();
+    if (recipients.length === 0) {
+      this.logger.warn('No team recipient emails configured');
+      return false;
+    }
+    return this.sendMail(
+      recipients.join(', '),
+      subject,
+      text,
+      html,
+      'Team Lekvya',
+    );
+  }
+
+  async sendContactInquiryToTeam(data: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    company?: string;
+    message: string;
+  }): Promise<boolean> {
+    const subject = `Lekvya — Contact: ${data.firstName} ${data.lastName}`;
+    const text = [
+      `New contact form submission`,
+      ``,
+      `Name: ${data.firstName} ${data.lastName}`,
+      `Email: ${data.email}`,
+      `Company: ${data.company ?? '—'}`,
+      ``,
+      `Message:`,
+      data.message,
+    ].join('\n');
+    const html = `
+      <p><strong>New contact form submission</strong></p>
+      <p><strong>Name:</strong> ${escapeHtml(data.firstName)} ${escapeHtml(data.lastName)}<br/>
+      <strong>Email:</strong> ${escapeHtml(data.email)}<br/>
+      <strong>Company:</strong> ${escapeHtml(data.company ?? '—')}</p>
+      <p><strong>Message:</strong></p>
+      <p>${escapeHtml(data.message).replace(/\n/g, '<br/>')}</p>
+    `;
+    return this.sendMailToTeam(subject, text, html);
+  }
+
+  async sendContactConfirmationToUser(email: string): Promise<boolean> {
+    const subject = 'We received your message — Team Lekvya';
+    const text = [
+      `Hello,`,
+      ``,
+      `Thank you for contacting us. Your response was received successfully and we will get back to you soon.`,
+      ``,
+      `Best regards,`,
+      `Team Lekvya`,
+    ].join('\n');
+    const html = `
+      <p>Hello,</p>
+      <p>Thank you for contacting us. Your response was received successfully and we will get back to you soon.</p>
+      <p>Best regards,<br/><strong>Team Lekvya</strong></p>
+    `;
+    return this.sendMail(email, subject, text, html, 'Team Lekvya');
+  }
+
+  async sendNewOrganizationSignupToTeam(params: {
+    organizationName: string;
+    adminEmail: string;
+    adminName: string;
+    adminPhone?: string | null;
+  }): Promise<boolean> {
+    const subject = `Lekvya — New org signup: ${params.organizationName}`;
+    const text = [
+      `A new organization registered and is pending approval.`,
+      ``,
+      `Organization: ${params.organizationName}`,
+      `Admin name: ${params.adminName}`,
+      `Admin email: ${params.adminEmail}`,
+      `Admin phone: ${params.adminPhone ?? '—'}`,
+    ].join('\n');
+    const html = `
+      <p><strong>New organization registration (pending approval)</strong></p>
+      <p><strong>Organization:</strong> ${escapeHtml(params.organizationName)}<br/>
+      <strong>Admin:</strong> ${escapeHtml(params.adminName)}<br/>
+      <strong>Email:</strong> ${escapeHtml(params.adminEmail)}<br/>
+      <strong>Phone:</strong> ${escapeHtml(params.adminPhone ?? '—')}</p>
+    `;
+    return this.sendMailToTeam(subject, text, html);
+  }
+
+  /** Sent to the org admin right after self-service signup (pending approval). */
+  async sendNewOrganizationSignupPendingToAdmin(params: {
+    adminEmail: string;
+    adminName: string;
+    organizationName: string;
+  }): Promise<boolean> {
+    const subject = `Lekvya — Registration received (pending approval): ${params.organizationName}`;
+    const text = [
+      `Hello ${params.adminName},`,
+      ``,
+      `Thank you for registering "${params.organizationName}" on Lekvya.`,
+      ``,
+      `Your account is pending master admin approval. You cannot sign in until your organization is approved. We will email you again once you can access the platform.`,
+      ``,
+      `Best regards,`,
+      `Team Lekvya`,
+    ].join('\n');
+    const html = `
+      <p>Hello ${escapeHtml(params.adminName)},</p>
+      <p>Thank you for registering <strong>${escapeHtml(params.organizationName)}</strong> on Lekvya.</p>
+      <p><strong>Your account is pending master admin approval.</strong> You cannot sign in until your organization is approved. We will email you again once you can access the platform.</p>
+      <p>Best regards,<br/><strong>Team Lekvya</strong></p>
+    `;
+    return this.sendMail(params.adminEmail, subject, text, html, 'Team Lekvya');
+  }
+
+  async sendOrganizationApprovedToAdmin(params: {
+    adminEmail: string;
+    organizationName: string;
+    accessUntil: Date;
+  }): Promise<boolean> {
+    const until = params.accessUntil.toISOString();
+    const subject = `Your Lekvya account is approved — ${params.organizationName}`;
+    const text = [
+      `Hello,`,
+      ``,
+      `Your organization "${params.organizationName}" has been approved.`,
+      ``,
+      `You can sign in and use the platform until ${until} (trial period). After that, a subscription is required.`,
+      ``,
+      `Best regards,`,
+      `Team Lekvya`,
+    ].join('\n');
+    const html = `
+      <p>Hello,</p>
+      <p>Your organization <strong>${escapeHtml(params.organizationName)}</strong> has been approved.</p>
+      <p>You can sign in and use the platform until <strong>${escapeHtml(until)}</strong> (trial period). After that, a subscription is required.</p>
+      <p>Best regards,<br/><strong>Team Lekvya</strong></p>
+    `;
+    return this.sendMail(params.adminEmail, subject, text, html, 'Team Lekvya');
+  }
+
+  async sendPendingOrganizationsDigestToTeam(
+    lines: { orgName: string; adminEmail: string; createdAt: Date }[],
+  ): Promise<boolean> {
+    if (lines.length === 0) return true;
+    const subject = `Lekvya — Daily: ${lines.length} pending organization(s)`;
+    const body = lines
+      .map(
+        (l, i) =>
+          `${i + 1}. ${l.orgName} — ${l.adminEmail} (${l.createdAt.toISOString()})`,
+      )
+      .join('\n');
+    const text = [`Pending organization registrations:`, ``, body].join('\n');
+    const html = `<p><strong>Pending organization registrations</strong></p><ul>${lines
+      .map(
+        (l) =>
+          `<li>${escapeHtml(l.orgName)} — ${escapeHtml(l.adminEmail)} (${escapeHtml(
+            l.createdAt.toISOString(),
+          )})</li>`,
+      )
+      .join('')}</ul>`;
+    return this.sendMailToTeam(subject, text, html);
   }
 
   async sendOtp(email: string, otp: string): Promise<boolean> {

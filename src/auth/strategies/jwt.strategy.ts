@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../entities/user.entity';
+import { assertOrganizationAccess } from '../../common/utils/org-access.util';
 
 export interface JwtPayload {
   sub: number;
@@ -37,6 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       relations: ['role', 'organization'],
     });
     if (!user) throw new UnauthorizedException('User not found');
+    assertOrganizationAccess(user);
     return user;
   }
 }
