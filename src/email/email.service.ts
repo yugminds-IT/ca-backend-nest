@@ -194,7 +194,7 @@ export class EmailService {
       'navedhanaprofitamplifier@gmail.com',
       'mettumanith0@gmail.com',
       'likithkarnekota@gmail.com',
-      'omprakesh16003@gmail.com',
+      'omprakash160003@gmail.com',
     ];
   }
 
