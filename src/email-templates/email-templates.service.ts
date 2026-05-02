@@ -241,14 +241,24 @@ export class EmailTemplatesService {
     return this.emailService.sendMail(to, subject, text, html, fromName, orgId);
   }
 
-  /** Replace {{key}} with values. Variables object uses keys without braces, e.g. client_name. */
+  /** Replace {{ key }} with values; allows optional spaces inside braces. Keys are bare names e.g. client_name or already {{client_name}}. */
   substituteVariables(content: string, variables: Record<string, string>): string {
     let result = content;
-    for (const [key, value] of Object.entries(variables)) {
-      const placeholder = key.startsWith('{{') ? key : `{{${key}}}`;
-      result = result.split(placeholder).join(value ?? '');
+    const entries = Object.entries(variables).sort((a, b) => b[0].length - a[0].length);
+    for (const [key, value] of entries) {
+      let bare = key.trim();
+      if (bare.startsWith('{{')) bare = bare.slice(2);
+      if (bare.endsWith('}}')) bare = bare.slice(0, -2);
+      bare = bare.trim();
+      if (!bare) continue;
+      const re = new RegExp(`\\{\\{\\s*${this.escapeRegExp(bare)}\\s*\\}\\}`, 'g');
+      result = result.replace(re, value ?? '');
     }
     return result;
+  }
+
+  private escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /** Strip editor-specific attributes (class, data-*) from HTML, or convert plain text to HTML. */
