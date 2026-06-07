@@ -34,6 +34,7 @@ import { Otp } from './entities/otp.entity';
 import { ClientFile } from './entities/client-file.entity';
 import { EmailTemplate } from './entities/email-template.entity';
 import { EmailSchedule } from './entities/email-schedule.entity';
+import { EmailRecurringSchedule } from './entities/email-recurring-schedule.entity';
 import { ActivityLog } from './entities/activity-log.entity';
 import { Notification } from './entities/notification.entity';
 
@@ -48,7 +49,7 @@ import { Notification } from './entities/notification.entity';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, ActivityLog, Notification],
+      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, EmailRecurringSchedule, ActivityLog, Notification],
       synchronize: false,
       logging: false,
       retryAttempts: 5,

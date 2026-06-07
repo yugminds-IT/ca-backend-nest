@@ -19,6 +19,7 @@ import { RoleName } from '../common/enums/role.enum';
 import { MailManagementService } from './mail-management.service';
 import { ScheduleEmailDto } from './dto/schedule-email.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
+import { UpdateRecurringScheduleDto } from './dto/update-recurring-schedule.dto';
 
 @Controller('mail-management')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -79,5 +80,34 @@ export class MailManagementController {
   @Delete('schedules/:id')
   cancelSchedule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.service.cancelSchedule(id, user);
+  }
+
+  @Get('recurring')
+  listRecurringSchedules(@CurrentUser() user: User) {
+    return this.service.listRecurringSchedules(user);
+  }
+
+  @Patch('recurring/:id/stop')
+  stopRecurringSchedule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.service.stopRecurringSchedule(id, user);
+  }
+
+  @Patch('recurring/:id/start')
+  startRecurringSchedule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.service.startRecurringSchedule(id, user);
+  }
+
+  @Patch('recurring/:id')
+  updateRecurringSchedule(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateRecurringScheduleDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.service.updateRecurringSchedule(id, dto, user);
+  }
+
+  @Delete('recurring/:id')
+  deleteRecurringSchedule(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.service.deleteRecurringSchedule(id, user);
   }
 }

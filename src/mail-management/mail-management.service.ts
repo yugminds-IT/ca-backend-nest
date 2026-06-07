@@ -9,6 +9,7 @@ import { Repository, LessThanOrEqual } from 'typeorm';
 import { Client } from '../entities/client.entity';
 import { ClientDirector } from '../entities/client-director.entity';
 import { EmailSchedule, EmailScheduleStatus } from '../entities/email-schedule.entity';
+import { EmailRecurringSchedule } from '../entities/email-recurring-schedule.entity';
 import { EmailTemplate } from '../entities/email-template.entity';
 import { Organization } from '../entities/organization.entity';
 import { User } from '../entities/user.entity';
@@ -41,6 +42,8 @@ export class MailManagementService {
     private directorRepo: Repository<ClientDirector>,
     @InjectRepository(EmailSchedule)
     private scheduleRepo: Repository<EmailSchedule>,
+    @InjectRepository(EmailRecurringSchedule)
+    private recurringRepo: Repository<EmailRecurringSchedule>,
     @InjectRepository(EmailTemplate)
     private templateRepo: Repository<EmailTemplate>,
     @InjectRepository(Organization)
@@ -227,31 +230,33 @@ export class MailManagementService {
       return slots;
     }
 
-    // ── monthly: same day each month in range ──
-    if (schedule.type === 'monthly' && schedule.fromDate && schedule.toDate) {
-      const from = new Date(schedule.fromDate);
-      const to = new Date(schedule.toDate);
-      if (from > to) return slots;
-      const dom = schedule.dayOfMonth ?? from.getDate(); // default to fromDate's day
-      const clamp = (d: Date, day: number) => {
-        // clamp to last day of month if day > month length
-        const max = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-        return Math.min(day, max);
-      };
-      let year = from.getFullYear();
-      let month = from.getMonth();
-      while (true) {
-        const actualDay = clamp(new Date(year, month, 1), dom);
-        const candidate = new Date(year, month, actualDay);
-        if (candidate > to) break;
-        if (candidate >= from) pushDate(candidate.toISOString().slice(0, 10));
-        month++;
-        if (month > 11) { month = 0; year++; }
-      }
-      return slots;
-    }
-
     return slots;
+  }
+
+  /** Get local date/time components from a UTC Date using a timezone offset string like "+05:30". Falls back to UTC. */
+  private getLocalDate(d: Date, timeZoneOffset?: string): { year: number; month: number; day: number; hour: number; minute: number } {
+    if (timeZoneOffset && /^[+-]\d{2}:?\d{2}$/.test(timeZoneOffset.replace(':', ''))) {
+      const off = timeZoneOffset.replace(':', '');
+      const sign = off[0] === '+' ? 1 : -1;
+      const offsetH = parseInt(off.slice(1, 3), 10);
+      const offsetM = parseInt(off.slice(3), 10);
+      const offsetMs = sign * (offsetH * 60 + offsetM) * 60 * 1000;
+      const local = new Date(d.getTime() + offsetMs);
+      return {
+        year: local.getUTCFullYear(),
+        month: local.getUTCMonth() + 1,
+        day: local.getUTCDate(),
+        hour: local.getUTCHours(),
+        minute: local.getUTCMinutes(),
+      };
+    }
+    return {
+      year: d.getUTCFullYear(),
+      month: d.getUTCMonth() + 1,
+      day: d.getUTCDate(),
+      hour: d.getUTCHours(),
+      minute: d.getUTCMinutes(),
+    };
   }
 
   /**
@@ -278,7 +283,7 @@ export class MailManagementService {
     return d;
   }
 
-  async createSchedule(dto: ScheduleEmailDto, currentUser: User): Promise<{ created: number; schedules: EmailSchedule[] }> {
+  async createSchedule(dto: ScheduleEmailDto, currentUser: User): Promise<any> {
     let templateRef: EmailTemplate | null = null;
     if (dto.templateId != null) {
       templateRef = await this.templateRepo.findOne({ where: { id: dto.templateId } });
@@ -289,6 +294,37 @@ export class MailManagementService {
     } else {
       if (!dto.subject?.trim()) throw new BadRequestException('subject is required for custom scheduled emails');
       if (!dto.body?.trim()) throw new BadRequestException('body is required for custom scheduled emails');
+    }
+
+    // Monthly type creates an indefinitely recurring schedule
+    if (dto.schedule.type === 'monthly') {
+      const months = dto.schedule.monthlyMonths ?? [];
+      const days = dto.schedule.monthlyDays ?? [];
+      if (!months.length) throw new BadRequestException('Monthly schedule requires at least one month selected');
+      if (!days.length) throw new BadRequestException('Monthly schedule requires at least one day of month selected');
+      const validTimes = dto.schedule.times.filter((t) => t?.trim());
+      if (!validTimes.length) throw new BadRequestException('Monthly schedule requires at least one send time');
+
+      const organizationId = currentUser.role?.name === RoleName.MASTER_ADMIN
+        ? (templateRef?.organizationId ?? null)
+        : currentUser.organizationId;
+
+      const recurring = this.recurringRepo.create({
+        templateId: dto.templateId ?? null,
+        subject: dto.templateId == null ? dto.subject!.trim() : null,
+        body: dto.templateId == null ? dto.body!.trim() : null,
+        recipientEmails: [...new Set(dto.recipientEmails)],
+        variables: dto.variables ?? null,
+        months,
+        days,
+        times: validTimes,
+        timeZoneOffset: dto.schedule.timeZoneOffset ?? null,
+        status: 'active',
+        organizationId,
+        createdBy: currentUser.id,
+      });
+      const saved = await this.recurringRepo.save(recurring);
+      return { created: 1, type: 'recurring', id: saved.id };
     }
 
     const slots = this.expandScheduleToSlots(dto.schedule);
@@ -370,6 +406,67 @@ export class MailManagementService {
     return this.scheduleRepo.save(schedule);
   }
 
+  async updateRecurringSchedule(
+    id: number,
+    dto: { months?: number[]; days?: number[]; times?: string[]; recipientEmails?: string[] },
+    currentUser: User,
+  ): Promise<EmailRecurringSchedule> {
+    const recurring = await this.recurringRepo.findOne({ where: { id } });
+    if (!recurring) throw new NotFoundException('Recurring schedule not found');
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      if (recurring.organizationId !== currentUser.organizationId) throw new ForbiddenException('Access denied');
+    }
+    if (dto.months?.length) recurring.months = dto.months;
+    if (dto.days?.length) recurring.days = dto.days;
+    if (dto.times?.length) recurring.times = dto.times.filter((t) => t?.trim());
+    if (dto.recipientEmails?.length) recurring.recipientEmails = [...new Set(dto.recipientEmails)];
+    return this.recurringRepo.save(recurring);
+  }
+
+  async startRecurringSchedule(id: number, currentUser: User): Promise<EmailRecurringSchedule> {
+    const recurring = await this.recurringRepo.findOne({ where: { id } });
+    if (!recurring) throw new NotFoundException('Recurring schedule not found');
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      if (recurring.organizationId !== currentUser.organizationId) throw new ForbiddenException('Access denied');
+    }
+    if (recurring.status === 'active') throw new BadRequestException('Recurring schedule is already active');
+    recurring.status = 'active';
+    return this.recurringRepo.save(recurring);
+  }
+
+  async deleteRecurringSchedule(id: number, currentUser: User): Promise<void> {
+    const recurring = await this.recurringRepo.findOne({ where: { id } });
+    if (!recurring) throw new NotFoundException('Recurring schedule not found');
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      if (recurring.organizationId !== currentUser.organizationId) throw new ForbiddenException('Access denied');
+    }
+    await this.recurringRepo.remove(recurring);
+  }
+
+  async listRecurringSchedules(currentUser: User) {
+    const qb = this.recurringRepo
+      .createQueryBuilder('r')
+      .leftJoinAndSelect('r.template', 't')
+      .orderBy('r.id', 'DESC');
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      const orgId = currentUser.organizationId;
+      if (!orgId) return [];
+      qb.andWhere('r.organizationId = :orgId', { orgId });
+    }
+    return qb.getMany();
+  }
+
+  async stopRecurringSchedule(id: number, currentUser: User): Promise<EmailRecurringSchedule> {
+    const recurring = await this.recurringRepo.findOne({ where: { id } });
+    if (!recurring) throw new NotFoundException('Recurring schedule not found');
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      if (recurring.organizationId !== currentUser.organizationId) throw new ForbiddenException('Access denied');
+    }
+    if (recurring.status === 'stopped') throw new BadRequestException('Recurring schedule is already stopped');
+    recurring.status = 'stopped';
+    return this.recurringRepo.save(recurring);
+  }
+
   private canUseTemplateForSending(user: User, template: EmailTemplate): boolean {
     if (user.role?.name === RoleName.MASTER_ADMIN) return template.organizationId == null;
     return template.organizationId == null || template.organizationId === user.organizationId;
@@ -380,9 +477,60 @@ export class MailManagementService {
     return schedule.organizationId === user.organizationId;
   }
 
+  /**
+   * For each active recurring monthly schedule, check whether the current moment matches a
+   * configured month+day+time slot and, if so, insert a pending EmailSchedule record.
+   * Dedup: skips if a record already exists within ±60 s of the computed scheduledAt.
+   */
+  private async insertRecurringDueSlots(now: Date): Promise<void> {
+    const activeRecurring = await this.recurringRepo.find({ where: { status: 'active' } });
+    for (const recurring of activeRecurring) {
+      const local = this.getLocalDate(now, recurring.timeZoneOffset ?? undefined);
+      if (!recurring.months.includes(local.month)) continue;
+      if (!recurring.days.includes(local.day)) continue;
+
+      for (const timeStr of recurring.times) {
+        const dateStr = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+        const scheduledAt = this.slotToScheduledAt(dateStr, timeStr, recurring.timeZoneOffset ?? undefined);
+
+        // Only fire within a 2-minute window to compensate for cron startup lag
+        const diffMs = now.getTime() - scheduledAt.getTime();
+        if (diffMs < 0 || diffMs > 120_000) continue;
+
+        // Dedup: skip if a record already exists for this recurring slot (±60 s window)
+        const windowStart = new Date(scheduledAt.getTime() - 60_000);
+        const windowEnd = new Date(scheduledAt.getTime() + 60_000);
+        const existing = await this.scheduleRepo
+          .createQueryBuilder('s')
+          .where('s."recurringScheduleId" = :id', { id: recurring.id })
+          .andWhere('s."scheduledAt" BETWEEN :start AND :end', { start: windowStart, end: windowEnd })
+          .getOne();
+        if (existing) continue;
+
+        const record = this.scheduleRepo.create({
+          templateId: recurring.templateId,
+          subject: recurring.subject,
+          body: recurring.body,
+          recipientEmails: recurring.recipientEmails,
+          variables: recurring.variables,
+          scheduledAt,
+          status: 'pending',
+          organizationId: recurring.organizationId,
+          createdBy: recurring.createdBy,
+          recurringScheduleId: recurring.id,
+        });
+        await this.scheduleRepo.save(record);
+      }
+    }
+  }
+
   /** Process pending schedules due now: send to each recipient with 2 sec delay. Called by cron. */
   async processDueSchedules(): Promise<{ processed: number; sent: number; failed: number }> {
     const now = new Date();
+
+    // Materialise any recurring monthly slots that are due before fetching pending records
+    await this.insertRecurringDueSlots(now);
+
     const pending = await this.scheduleRepo.find({
       where: { status: 'pending', scheduledAt: LessThanOrEqual(now) },
       relations: ['template'],

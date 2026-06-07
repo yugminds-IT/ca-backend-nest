@@ -1,6 +1,7 @@
 import {
   IsString,
   IsNumber,
+  IsInt,
   IsOptional,
   IsArray,
   IsEmail,
@@ -8,6 +9,8 @@ import {
   IsIn,
   ArrayMinSize,
   ValidateNested,
+  Min,
+  Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -49,12 +52,24 @@ export class ScheduleSlotDto {
   days?: string[];
 
   /**
-   * For monthly: day of the month to send (1–31).
-   * Defaults to the day of fromDate if omitted.
+   * For monthly recurring: month numbers 1–12 (e.g. [1, 6, 12] for Jan, Jun, Dec).
    */
   @IsOptional()
-  @IsNumber()
-  dayOfMonth?: number;
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(12, { each: true })
+  monthlyMonths?: number[];
+
+  /**
+   * For monthly recurring: day-of-month numbers 1–31 (e.g. [1, 15]).
+   */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(31, { each: true })
+  monthlyDays?: number[];
 
   /** Times like "09:00", "14:00" — interpreted in timeZoneOffset if provided */
   @IsArray()

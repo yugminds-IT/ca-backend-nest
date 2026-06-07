@@ -10,53 +10,52 @@ import {
 import { EmailTemplate } from './email-template.entity';
 import { Organization } from './organization.entity';
 import { User } from './user.entity';
-import { EmailRecurringSchedule } from './email-recurring-schedule.entity';
 
-export type EmailScheduleStatus = 'pending' | 'sent' | 'failed' | 'cancelled';
+export type RecurringScheduleStatus = 'active' | 'stopped';
 
-@Entity('email_schedules')
-export class EmailSchedule {
+@Entity('email_recurring_schedules')
+export class EmailRecurringSchedule {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column('int', { name: 'templateId', nullable: true })
   templateId: number | null;
 
-  /** Subject line — populated for custom emails (no template) */
   @Column({ type: 'varchar', length: 500, nullable: true })
   subject: string | null;
 
-  /** Body HTML — populated for custom emails (no template) */
   @Column({ type: 'text', nullable: true })
   body: string | null;
 
   @Column({ type: 'jsonb', name: 'recipientEmails' })
   recipientEmails: string[];
 
-  /** JSON object for template variable substitution */
   @Column({ type: 'jsonb', nullable: true })
   variables: Record<string, string> | null;
 
-  @Column({ type: 'timestamp', name: 'scheduledAt' })
-  scheduledAt: Date;
+  /** Month numbers 1–12 */
+  @Column({ type: 'jsonb' })
+  months: number[];
 
-  @Column({ type: 'varchar', length: 20, default: 'pending' })
-  status: EmailScheduleStatus;
+  /** Day-of-month numbers 1–31 */
+  @Column({ type: 'jsonb' })
+  days: number[];
+
+  /** Times like "09:00" */
+  @Column({ type: 'jsonb' })
+  times: string[];
+
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  timeZoneOffset: string | null;
+
+  @Column({ type: 'varchar', length: 20, default: 'active' })
+  status: RecurringScheduleStatus;
 
   @Column('int', { name: 'organizationId', nullable: true })
   organizationId: number | null;
 
   @Column('int', { name: 'createdBy' })
   createdBy: number;
-
-  @Column({ type: 'timestamp', name: 'sentAt', nullable: true })
-  sentAt: Date | null;
-
-  @Column({ type: 'text', name: 'errorMessage', nullable: true })
-  errorMessage: string | null;
-
-  @Column('int', { name: 'recurringScheduleId', nullable: true })
-  recurringScheduleId: number | null;
 
   @CreateDateColumn()
   createdAt: Date;
@@ -75,8 +74,4 @@ export class EmailSchedule {
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'createdBy' })
   creator: User;
-
-  @ManyToOne(() => EmailRecurringSchedule, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'recurringScheduleId' })
-  recurringSchedule: EmailRecurringSchedule | null;
 }
