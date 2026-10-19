@@ -62,6 +62,18 @@ export class Organization {
   @Column({ type: 'timestamptz', nullable: true })
   approvedAt: Date | null;
 
+  /** Selected industry: school | website_developer | ecommerce | healthcare | saas | financial_services | custom */
+  @Column({ type: 'varchar', length: 50, default: 'custom' })
+  industry: string;
+
+  /** Industry-specific settings (brand color, logo URL, default reply-to, custom fields) */
+  @Column({ type: 'jsonb', nullable: true })
+  industrySettings: Record<string, any> | null;
+
+  /** Whitelisted CORS domains for public contact form submissions */
+  @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
+  allowedOrigins: string[];
+
   @CreateDateColumn()
   createdAt: Date;
 

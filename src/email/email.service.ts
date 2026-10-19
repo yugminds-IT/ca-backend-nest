@@ -107,6 +107,8 @@ export class EmailService {
     html?: string,
     fromName?: string,
     orgId?: number,
+    cc?: string | string[],
+    bcc?: string | string[],
   ): Promise<boolean> {
     let transporter: Transporter | null = null;
     let fromAddress = this.globalFrom;
@@ -133,14 +135,23 @@ export class EmailService {
       ? `"${fromName.replace(/"/g, '\\"')}" <${fromAddress}>`
       : fromAddress;
 
+    const { html: processedHtml, text: processedText } = this.appendLekvyaFooter(html, text);
+
     try {
-      await transporter.sendMail({
+      const mailOptions: any = {
         from,
         to,
         subject,
-        text,
-        html: html ?? text.replace(/\n/g, '<br>'),
-      });
+        text: processedText,
+        html: processedHtml,
+      };
+      if (cc && (Array.isArray(cc) ? cc.length > 0 : cc.trim())) {
+        mailOptions.cc = Array.isArray(cc) ? cc.join(', ') : cc;
+      }
+      if (bcc && (Array.isArray(bcc) ? bcc.length > 0 : bcc.trim())) {
+        mailOptions.bcc = Array.isArray(bcc) ? bcc.join(', ') : bcc;
+      }
+      await transporter.sendMail(mailOptions);
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return true;
     } catch (err: unknown) {
@@ -384,5 +395,39 @@ export class EmailService {
   ): Promise<void> {
     const t = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
     await t.verify();
+  }
+
+  /**
+   * Appends the "Email sent via Lekvya" footer linking to FRONTEND_URL to every outgoing email.
+   */
+  private appendLekvyaFooter(html?: string, text?: string): { html: string; text: string } {
+    const frontendUrl = (
+      this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000'
+    ).replace(/\/+$/, '');
+
+    const footerHtml = `
+<div id="lekvya-email-footer" style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #64748b; line-height: 1.5;">
+  <a href="${frontendUrl}" target="_blank" rel="noopener noreferrer" style="color: #64748b; text-decoration: none; font-size: 12px;">
+    Email sent via <span style="color: #4f46e5; font-weight: 600; text-decoration: underline;">Lekvya</span>
+  </a>
+</div>`;
+
+    const footerText = `\n\n---\nEmail sent via Lekvya: ${frontendUrl}`;
+
+    let processedHtml = html ?? (text ? text.replace(/\n/g, '<br>') : '');
+    if (processedHtml && !processedHtml.includes('lekvya-email-footer')) {
+      if (processedHtml.includes('</body>')) {
+        processedHtml = processedHtml.replace('</body>', `${footerHtml}</body>`);
+      } else {
+        processedHtml = `${processedHtml}${footerHtml}`;
+      }
+    }
+
+    let processedText = text ?? '';
+    if (processedText && !processedText.includes('Email sent via Lekvya')) {
+      processedText = `${processedText.trim()}${footerText}`;
+    }
+
+    return { html: processedHtml, text: processedText };
   }
 }

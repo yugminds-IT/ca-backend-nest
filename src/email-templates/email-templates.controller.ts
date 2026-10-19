@@ -43,18 +43,21 @@ export class EmailTemplatesController {
   }
 
   /** Dropdown: list categories */
+  @Public()
   @Get('categories')
   getCategories() {
     return this.service.getCategories();
   }
 
   /** Dropdown: list types by category (query: category=service) */
+  @Public()
   @Get('types')
   getTypes(@Query('category') category: string) {
     return this.service.getTypesByCategory(category ?? '');
   }
 
   /** Dropdown: list available variables */
+  @Public()
   @Get('variables')
   getVariables() {
     return this.service.getVariables();
@@ -109,6 +112,15 @@ export class EmailTemplatesController {
   @UseGuards(RolesGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
   sendWithTemplate(@Body() dto: SendTemplateEmailDto, @CurrentUser() user: User) {
-    return this.service.sendWithTemplate(dto.to, dto.templateId ?? null, dto.variables ?? {}, user, dto.subject, dto.body);
+    return this.service.sendWithTemplate(
+      dto.to,
+      dto.templateId ?? null,
+      dto.variables ?? {},
+      user,
+      dto.subject,
+      dto.body,
+      dto.cc,
+      dto.bcc,
+    );
   }
 }

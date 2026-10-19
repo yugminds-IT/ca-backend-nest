@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { BusinessType } from '../entities/business-type.entity';
+import { Organization } from '../entities/organization.entity';
 import { CreateBusinessTypeDto } from './dto/create-business-type.dto';
 import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
@@ -11,18 +12,28 @@ export class BusinessTypesService {
   constructor(
     @InjectRepository(BusinessType)
     private repo: Repository<BusinessType>,
+    @InjectRepository(Organization)
+    private organizationRepo: Repository<Organization>,
   ) {}
 
   async findAll(currentUser: User, organizationId?: string): Promise<BusinessType[]> {
     const orgIdNum = organizationId != null ? parseInt(organizationId, 10) : currentUser.organizationId;
-    const where =
-      orgIdNum != null && !Number.isNaN(orgIdNum)
-        ? [{ organizationId: IsNull() }, { organizationId: orgIdNum }]
-        : [{ organizationId: IsNull() }];
-    return this.repo.find({
-      where,
-      order: { name: 'ASC' },
-    });
+
+    let userIndustry = currentUser.organization?.industry || 'financial_services';
+    if (orgIdNum != null && (!currentUser.organization || orgIdNum !== currentUser.organizationId)) {
+      const org = await this.organizationRepo.findOne({ where: { id: orgIdNum } });
+      if (org?.industry) userIndustry = org.industry;
+    }
+
+    const query = this.repo.createQueryBuilder('bt');
+    if (orgIdNum != null && !Number.isNaN(orgIdNum)) {
+      query.where('bt.organizationId = :orgIdNum', { orgIdNum })
+           .orWhere('(bt.organizationId IS NULL AND bt.industry = :industry)', { industry: userIndustry });
+    } else {
+      query.where('bt.organizationId IS NULL AND bt.industry = :industry', { industry: userIndustry });
+    }
+
+    return query.orderBy('bt.name', 'ASC').getMany();
   }
 
   async createCustom(dto: CreateBusinessTypeDto, currentUser: User): Promise<BusinessType> {

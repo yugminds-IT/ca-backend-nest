@@ -34,6 +34,15 @@ export class OrganizationSignupOrganizationDto {
   @IsOptional()
   @MaxLength(20)
   pincode?: string;
+
+  /** school | website_developer | ecommerce | healthcare | saas | financial_services | custom */
+  @IsString()
+  @IsOptional()
+  @MaxLength(50)
+  industry?: string;
+
+  @IsOptional()
+  allowedOrigins?: string[];
 }
 
 export class OrganizationSignupAdminDto {

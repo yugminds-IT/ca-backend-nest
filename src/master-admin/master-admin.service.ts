@@ -5,8 +5,10 @@ import { User } from '../entities/user.entity';
 import { Organization } from '../entities/organization.entity';
 import { EmailTemplate } from '../entities/email-template.entity';
 import { EmailSchedule } from '../entities/email-schedule.entity';
+import { WorkspaceFeature } from '../entities/workspace-feature.entity';
 import { EmailService } from '../email/email.service';
 import { RoleName } from '../common/enums/role.enum';
+import { UpdateWorkspaceFeatureDto } from './dto/workspace-feature.dto';
 
 @Injectable()
 export class MasterAdminService {
@@ -19,6 +21,8 @@ export class MasterAdminService {
     private templateRepo: Repository<EmailTemplate>,
     @InjectRepository(EmailSchedule)
     private scheduleRepo: Repository<EmailSchedule>,
+    @InjectRepository(WorkspaceFeature)
+    private featureRepo: Repository<WorkspaceFeature>,
     private emailService: EmailService,
   ) {}
 
@@ -367,5 +371,180 @@ export class MasterAdminService {
     }
 
     return result;
+  }
+
+  // ─── Workspace Features Management (Lock/Unlock & Priority) ───────────────
+
+  async listPublicWorkspaceFeatures() {
+    let features = await this.featureRepo.find({
+      where: { isActive: true },
+      order: { priority: 'ASC', id: 'ASC' },
+    });
+
+    if (features.length === 0) {
+      await this.resetWorkspaceFeatures();
+      features = await this.featureRepo.find({
+        where: { isActive: true },
+        order: { priority: 'ASC', id: 'ASC' },
+      });
+    }
+
+    return features;
+  }
+
+  async listAllWorkspaceFeatures() {
+    let features = await this.featureRepo.find({
+      order: { priority: 'ASC', id: 'ASC' },
+    });
+
+    if (features.length === 0) {
+      await this.resetWorkspaceFeatures();
+      features = await this.featureRepo.find({
+        order: { priority: 'ASC', id: 'ASC' },
+      });
+    }
+
+    return features;
+  }
+
+  async updateWorkspaceFeature(key: string, dto: UpdateWorkspaceFeatureDto) {
+    const feature = await this.featureRepo.findOne({ where: { key } });
+    if (!feature) {
+      throw new NotFoundException(`Workspace feature '${key}' not found`);
+    }
+
+    if (dto.name !== undefined) feature.name = dto.name;
+    if (dto.badge !== undefined) feature.badge = dto.badge;
+    if (dto.description !== undefined) feature.description = dto.description;
+    if (dto.icon !== undefined) feature.icon = dto.icon;
+    if (dto.gradient !== undefined) feature.gradient = dto.gradient;
+    if (dto.colSpan !== undefined) feature.colSpan = dto.colSpan;
+    if (dto.priority !== undefined) feature.priority = Number(dto.priority);
+    if (dto.isLocked !== undefined) feature.isLocked = Boolean(dto.isLocked);
+    if (dto.lockReason !== undefined) feature.lockReason = dto.lockReason;
+    if (dto.isActive !== undefined) feature.isActive = Boolean(dto.isActive);
+
+    return this.featureRepo.save(feature);
+  }
+
+  async reorderWorkspaceFeatures(items: { key: string; priority: number }[]) {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestException('Items array required for reordering');
+    }
+
+    for (const item of items) {
+      await this.featureRepo.update({ key: item.key }, { priority: Number(item.priority) });
+    }
+
+    return this.listAllWorkspaceFeatures();
+  }
+
+  async resetWorkspaceFeatures() {
+    const defaults = [
+      {
+        key: 'website_developer',
+        name: 'Websites & Developers',
+        badge: 'API & Webhooks',
+        description: 'Embeddable contact forms, CORS domain whitelist & transactional email API.',
+        icon: 'Globe',
+        gradient: 'from-orange-500 to-amber-500',
+        colSpan: null,
+        priority: 1,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'school',
+        name: 'Educational Institutes',
+        badge: 'Campuses & Unis',
+        description: 'Student notices, fee alerts & internal circulars for faculty, lecturers & HODs.',
+        icon: 'GraduationCap',
+        gradient: 'from-blue-500 to-indigo-600',
+        colSpan: null,
+        priority: 2,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'ecommerce',
+        name: 'E-Commerce & Retail',
+        badge: 'High Conversion',
+        description: 'Order confirmations, shipment tracking updates & abandoned cart email drips.',
+        icon: 'ShoppingCart',
+        gradient: 'from-amber-500 to-orange-600',
+        colSpan: null,
+        priority: 3,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'healthcare',
+        name: 'Healthcare & Clinics',
+        badge: 'HIPAA-Friendly',
+        description: 'Patient appointment reminders, lab reports & doctor follow-up communications.',
+        icon: 'HeartPulse',
+        gradient: 'from-rose-500 to-pink-600',
+        colSpan: null,
+        priority: 4,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'saas',
+        name: 'SaaS & Tech Startups',
+        badge: 'Developer First',
+        description: 'Product onboarding drips, magic login alerts & automated subscription notices.',
+        icon: 'Rocket',
+        gradient: 'from-violet-500 to-purple-600',
+        colSpan: null,
+        priority: 5,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'financial_services',
+        name: 'CA & Financial Firms',
+        badge: 'Compliance Ready',
+        description: 'TDS challans, tax filing deadlines, GST reconciliation & document collection.',
+        icon: 'Calculator',
+        gradient: 'from-teal-500 to-emerald-600',
+        colSpan: null,
+        priority: 6,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+      {
+        key: 'custom',
+        name: 'Universal Business',
+        badge: 'All Industries',
+        description: 'Full-suite email automations, contact book management, scheduled broadcasts & custom templates for any enterprise.',
+        icon: 'Mail',
+        gradient: 'from-slate-700 to-slate-900',
+        colSpan: 'lg:col-span-2',
+        priority: 7,
+        isLocked: false,
+        lockReason: null,
+        isActive: true,
+      },
+    ];
+
+    for (const d of defaults) {
+      const existing = await this.featureRepo.findOne({ where: { key: d.key } });
+      if (existing) {
+        Object.assign(existing, d);
+        await this.featureRepo.save(existing);
+      } else {
+        const created = this.featureRepo.create(d);
+        await this.featureRepo.save(created);
+      }
+    }
+
+    return this.listAllWorkspaceFeatures();
   }
 }

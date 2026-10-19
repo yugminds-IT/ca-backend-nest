@@ -20,6 +20,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { RoleName } from '../common/enums/role.enum';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { ExtendOrgAccessDto } from './dto/extend-org-access.dto';
+import {
+  UpdateWorkspaceFeatureDto,
+  ReorderWorkspaceFeaturesDto,
+} from './dto/workspace-feature.dto';
 
 @Controller('master-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -116,5 +120,30 @@ export class MasterAdminController {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csv);
+  }
+
+  // ─── Workspace Feature Cards (Lock/Unlock & Priority Display) ─────────────
+
+  @Get('workspace-features')
+  getAllWorkspaceFeatures() {
+    return this.masterAdminService.listAllWorkspaceFeatures();
+  }
+
+  @Patch('workspace-features/reorder')
+  reorderWorkspaceFeatures(@Body() dto: ReorderWorkspaceFeaturesDto) {
+    return this.masterAdminService.reorderWorkspaceFeatures(dto.items);
+  }
+
+  @Patch('workspace-features/:key')
+  updateWorkspaceFeature(
+    @Param('key') key: string,
+    @Body() dto: UpdateWorkspaceFeatureDto,
+  ) {
+    return this.masterAdminService.updateWorkspaceFeature(key, dto);
+  }
+
+  @Post('workspace-features/reset-defaults')
+  resetWorkspaceFeatures() {
+    return this.masterAdminService.resetWorkspaceFeatures();
   }
 }

@@ -40,6 +40,7 @@ export class CreateEmailTemplateDto {
 }
 
 export function validateTemplateType(category: string, type: string): boolean {
+  if (!type || typeof type !== 'string') return false;
   const validTypes = getTypesForCategory(category);
-  return validTypes.length === 0 || validTypes.includes(type);
+  return validTypes.length === 0 || validTypes.includes(type) || /^[a-z0-9_]{2,80}$/i.test(type);
 }

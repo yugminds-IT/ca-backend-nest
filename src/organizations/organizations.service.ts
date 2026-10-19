@@ -128,9 +128,16 @@ export class OrganizationsService {
     );
   }
 
+  private canViewSmtp(currentUser: User, orgId: number): boolean {
+    return (
+      currentUser.role?.name === RoleName.MASTER_ADMIN ||
+      currentUser.organizationId === orgId
+    );
+  }
+
   /** Return SMTP config with password masked */
   async getSmtpConfig(id: number, currentUser: User) {
-    if (!this.canManageSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    if (!this.canViewSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
     return {

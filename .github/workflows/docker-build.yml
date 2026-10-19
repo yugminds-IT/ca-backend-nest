@@ -1,0 +1,134 @@
+name: Build, Push to Docker Hub & Deploy
+
+on:
+  push:
+    branches:
+      - server
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push image to registry'
+        required: true
+        type: boolean
+        default: true
+      deploy_coolify:
+        description: 'Trigger Coolify deployment after build'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build, Push & Deploy to Coolify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --- 1. Login to Docker Hub (if secrets provided) ---
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' && github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # --- 2. Login to GitHub Container Registry (Fallback) ---
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- 3. Extract Tags and Labels ---
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/ca-backend-nest', secrets.DOCKERHUB_USERNAME) || '' }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable=true
+
+      # --- 4. Build and Push Image ---
+      - name: Build and push Docker image
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push_image) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- 5. Trigger Coolify Deployment (Only on server branch) ---
+      - name: Trigger Coolify Deployment
+        if: |
+          github.ref == 'refs/heads/server' ||
+          (github.event_name == 'workflow_dispatch' && inputs.deploy_coolify)
+        env:
+          COOLIFY_WEBHOOK_URL: ${{ secrets.COOLIFY_WEBHOOK_URL }}
+          COOLIFY_BASE_URL: ${{ secrets.COOLIFY_BASE_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+        run: |
+          echo "Initiating Coolify deployment..."
+
+          # Option A: Direct Webhook URL
+          if [ -n "$COOLIFY_WEBHOOK_URL" ]; then
+            echo "🚀 Triggering via Webhook URL..."
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$COOLIFY_WEBHOOK_URL")
+            echo "HTTP Status: ${HTTP_CODE}"
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "✅ Coolify deployment successfully triggered via webhook!"
+              exit 0
+            fi
+          fi
+
+          # Option B: Coolify API with Bearer Token
+          if [ -n "$COOLIFY_BASE_URL" ] && [ -n "$COOLIFY_TOKEN" ] && [ -n "$COOLIFY_APP_UUID" ]; then
+            CLEAN_BASE_URL="${COOLIFY_BASE_URL%/}"
+            DEPLOY_URL="${CLEAN_BASE_URL}/api/v1/deploy?uuid=${COOLIFY_APP_UUID}&force=false"
+
+            echo "🚀 Triggering via Coolify API..."
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "${DEPLOY_URL}" \
+              -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            echo "Coolify API HTTP Status: ${HTTP_CODE}"
+            echo "Response: ${BODY}"
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "✅ Coolify deployment successfully triggered via API!"
+              exit 0
+            else
+              echo "::error::Coolify API returned error status: ${HTTP_CODE}"
+              exit 1
+            fi
+          fi
+
+          echo "⚠️ Warning: No Coolify credentials configured. Docker image was built and pushed successfully."

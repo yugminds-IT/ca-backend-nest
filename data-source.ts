@@ -13,7 +13,7 @@ if (existsSync(envPath)) config({ path: envPath, override: true });
 export default new DataSource({
   type: 'postgres',
   url: process.env.DATABASE_URL,
-  entities: ['src/entities/*.entity.ts'],
+  entities: ['src/**/*.entity.ts'],
   migrations: ['src/migrations/*.ts'],
   synchronize: false,
   logging: process.env.NODE_ENV === 'development',

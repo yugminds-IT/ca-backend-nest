@@ -41,5 +41,5 @@ export class UpdateEmailTemplateDto {
 export function validateTemplateTypeForUpdate(category: string | undefined, type: string | undefined): boolean {
   if (!category || !type) return true;
   const validTypes = getTypesForCategory(category);
-  return validTypes.length === 0 || validTypes.includes(type);
+  return validTypes.length === 0 || validTypes.includes(type) || /^[a-z0-9_]{2,80}$/i.test(type);
 }

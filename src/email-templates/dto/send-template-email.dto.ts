@@ -5,6 +5,16 @@ export class SendTemplateEmailDto {
   @IsEmail()
   to: string;
 
+  /** Optional CC email(s), comma-separated */
+  @IsOptional()
+  @IsString()
+  cc?: string;
+
+  /** Optional BCC email(s), comma-separated */
+  @IsOptional()
+  @IsString()
+  bcc?: string;
+
   /** templateId OR (subject + body) must be provided. */
   @IsOptional()
   @IsNumber()

@@ -156,6 +156,8 @@ export class EmailTemplatesService {
     currentUser: User,
     customSubject?: string,
     customBody?: string,
+    cc?: string,
+    bcc?: string,
   ): Promise<{ sent: boolean }> {
     let fromName: string | undefined;
     let subject: string;
@@ -189,7 +191,16 @@ export class EmailTemplatesService {
       text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
-    const sent = await this.emailService.sendMail(to, subject, text, html, fromName, currentUser.organizationId ?? undefined);
+    const sent = await this.emailService.sendMail(
+      to,
+      subject,
+      text,
+      html,
+      fromName,
+      currentUser.organizationId ?? undefined,
+      cc,
+      bcc,
+    );
 
     const now = new Date();
     await this.scheduleRepo.save(

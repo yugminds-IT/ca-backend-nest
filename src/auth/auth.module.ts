@@ -10,10 +10,12 @@ import { User } from '../entities/user.entity';
 import { Role } from '../entities/role.entity';
 import { Organization } from '../entities/organization.entity';
 import { Otp } from '../entities/otp.entity';
+import { ApiKey } from '../entities/api-key.entity';
+import { EmailTemplate } from '../entities/email-template.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Role, Organization, Otp]),
+    TypeOrmModule.forFeature([User, Role, Organization, Otp, ApiKey, EmailTemplate]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -19,6 +19,10 @@ import { JwtPayload } from './strategies/jwt.strategy';
 import { RoleName } from '../common/enums/role.enum';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { assertOrganizationAccess } from '../common/utils/org-access.util';
+import { ApiKey } from '../entities/api-key.entity';
+import { EmailTemplate } from '../entities/email-template.entity';
+import { INDUSTRY_PRESETS } from '../common/industry-presets';
+import { createHash, randomBytes } from 'crypto';
 
 const OTP_EXPIRY_MINUTES = 10;
 const OTP_LENGTH = 6;
@@ -34,6 +38,10 @@ export class AuthService {
     private orgRepo: Repository<Organization>,
     @InjectRepository(Otp)
     private otpRepo: Repository<Otp>,
+    @InjectRepository(ApiKey)
+    private apiKeyRepo: Repository<ApiKey>,
+    @InjectRepository(EmailTemplate)
+    private templateRepo: Repository<EmailTemplate>,
     private jwtService: JwtService,
     private emailService: EmailService,
     @Optional() private activityLog?: ActivityLogService,
@@ -207,6 +215,7 @@ export class AuthService {
       counter += 1;
       baseSlug = `${slug}-${counter}`;
     }
+    const industry = dto.organization.industry || 'custom';
     const org = await this.orgRepo.save(
       this.orgRepo.create({
         name: dto.organization.name,
@@ -215,9 +224,11 @@ export class AuthService {
         state: dto.organization.state ?? null,
         country: dto.organization.country ?? null,
         pincode: dto.organization.pincode ?? null,
-        approvalStatus: 'pending',
+        industry,
+        allowedOrigins: dto.organization.allowedOrigins ?? [],
+        approvalStatus: 'approved', // Instant onboarding for self-serve users
         accessUntil: null,
-        approvedAt: null,
+        approvedAt: new Date(),
       }),
     );
     const role = await this.roleRepo.findOne({ where: { name: RoleName.ORG_ADMIN } });
@@ -233,6 +244,23 @@ export class AuthService {
         organizationId: org.id,
       }),
     );
+
+    // Starter templates for chosen industry (if configured)
+    const preset = INDUSTRY_PRESETS[industry] ?? INDUSTRY_PRESETS.custom;
+    if (preset?.starterTemplates?.length) {
+      const templates = preset.starterTemplates.map((t) =>
+        this.templateRepo.create({
+          category: t.category,
+          type: t.type,
+          name: t.name,
+          subject: t.subject,
+          body: t.body,
+          organizationId: org.id,
+        }),
+      );
+      await this.templateRepo.save(templates);
+    }
+
     void this.emailService.sendNewOrganizationSignupToTeam({
       organizationName: org.name,
       adminEmail: email,

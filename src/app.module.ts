@@ -22,6 +22,11 @@ import { MasterAdminModule } from './master-admin/master-admin.module';
 import { ContactModule } from './contact/contact.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { TdsFilingModule } from './tds-filing/tds-filing.module';
+import { TdsFilingSession } from './tds-filing/tds-filing-session.entity';
+import { GstFilingModule } from './gst-filing/gst-filing.module';
+import { GstFilingSession } from './gst-filing/gst-filing-session.entity';
+import { DeveloperModule } from './developer/developer.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { Role } from './entities/role.entity';
 import { Organization } from './entities/organization.entity';
@@ -37,6 +42,15 @@ import { EmailSchedule } from './entities/email-schedule.entity';
 import { EmailRecurringSchedule } from './entities/email-recurring-schedule.entity';
 import { ActivityLog } from './entities/activity-log.entity';
 import { Notification } from './entities/notification.entity';
+import { ApiKey } from './entities/api-key.entity';
+import { EmailLog } from './entities/email-log.entity';
+import { FormSubmission } from './entities/form-submission.entity';
+import { Contact } from './entities/contact.entity';
+import { ContactList } from './entities/contact-list.entity';
+import { WebhookEndpoint } from './entities/webhook-endpoint.entity';
+import { SuppressionList } from './entities/suppression-list.entity';
+import { WorkspaceFeature } from './entities/workspace-feature.entity';
+import { ComplianceModule } from './compliance/compliance.module';
 
 @Module({
   imports: [
@@ -49,7 +63,32 @@ import { Notification } from './entities/notification.entity';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      entities: [Role, Organization, User, Client, BusinessType, Service, ClientDirector, Otp, ClientFile, EmailTemplate, EmailSchedule, EmailRecurringSchedule, ActivityLog, Notification],
+      entities: [
+        Role,
+        Organization,
+        User,
+        Client,
+        BusinessType,
+        Service,
+        ClientDirector,
+        Otp,
+        ClientFile,
+        EmailTemplate,
+        EmailSchedule,
+        EmailRecurringSchedule,
+        ActivityLog,
+        Notification,
+        TdsFilingSession,
+        GstFilingSession,
+        ApiKey,
+        EmailLog,
+        FormSubmission,
+        Contact,
+        ContactList,
+        WebhookEndpoint,
+        SuppressionList,
+        WorkspaceFeature,
+      ],
       synchronize: false,
       logging: false,
       retryAttempts: 5,
@@ -83,6 +122,10 @@ import { Notification } from './entities/notification.entity';
     ContactModule,
     NotificationsModule,
     DashboardModule,
+    TdsFilingModule,
+    GstFilingModule,
+    DeveloperModule,
+    ComplianceModule,
   ],
   controllers: [AppController],
   providers: [
