@@ -81,7 +81,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # --- 5. Trigger Coolify Deployment (Only on server branch) ---
+      # --- 5. Trigger Coolify Deployment ---
       - name: Trigger Coolify Deployment
         if: |
           github.ref == 'refs/heads/server' ||
@@ -92,23 +92,48 @@ jobs:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
           COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
         run: |
-          echo "Initiating Coolify deployment..."
+          echo "Initiating Coolify deployment trigger..."
 
           # Option A: Direct Webhook URL
           if [ -n "$COOLIFY_WEBHOOK_URL" ]; then
-            echo "🚀 Triggering via Webhook URL..."
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$COOLIFY_WEBHOOK_URL")
-            echo "HTTP Status: ${HTTP_CODE}"
+            CLEAN_URL="$COOLIFY_WEBHOOK_URL"
+            if [[ "$CLEAN_URL" != *"force="* ]]; then
+              if [[ "$CLEAN_URL" == *"?"* ]]; then
+                CLEAN_URL="${CLEAN_URL}&force=true"
+              else
+                CLEAN_URL="${CLEAN_URL}?force=true"
+              fi
+            fi
+
+            echo "🚀 Triggering via Webhook URL (with force pull)..."
+            # Try POST first, fallback to GET if 405
+            RESPONSE=$(curl -s -L -w "\n%{http_code}" -X POST "$CLEAN_URL")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            if [ "$HTTP_CODE" -eq 405 ]; then
+              echo "POST not allowed, retrying with GET..."
+              RESPONSE=$(curl -s -L -w "\n%{http_code}" -X GET "$CLEAN_URL")
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+              BODY=$(echo "$RESPONSE" | sed '$d')
+            fi
+
+            echo "Coolify HTTP Status: ${HTTP_CODE}"
+            echo "Coolify Response: ${BODY}"
+
             if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
               echo "✅ Coolify deployment successfully triggered via webhook!"
               exit 0
+            else
+              echo "::error::Coolify webhook returned error ${HTTP_CODE}: ${BODY}"
+              exit 1
             fi
           fi
 
           # Option B: Coolify API with Bearer Token
           if [ -n "$COOLIFY_BASE_URL" ] && [ -n "$COOLIFY_TOKEN" ] && [ -n "$COOLIFY_APP_UUID" ]; then
             CLEAN_BASE_URL="${COOLIFY_BASE_URL%/}"
-            DEPLOY_URL="${CLEAN_BASE_URL}/api/v1/deploy?uuid=${COOLIFY_APP_UUID}&force=false"
+            DEPLOY_URL="${CLEAN_BASE_URL}/api/v1/deploy?uuid=${COOLIFY_APP_UUID}&force=true"
 
             echo "🚀 Triggering via Coolify API..."
             RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
@@ -126,9 +151,10 @@ jobs:
               echo "✅ Coolify deployment successfully triggered via API!"
               exit 0
             else
-              echo "::error::Coolify API returned error status: ${HTTP_CODE}"
+              echo "::error::Coolify API returned error: ${HTTP_CODE}"
               exit 1
             fi
           fi
 
-          echo "⚠️ Warning: No Coolify credentials configured. Docker image was built and pushed successfully."
+          echo "::error::Neither COOLIFY_WEBHOOK_URL nor (COOLIFY_BASE_URL, COOLIFY_TOKEN, COOLIFY_APP_UUID) are set in GitHub Secrets!"
+          exit 1
