@@ -106,14 +106,21 @@ jobs:
             fi
 
             echo "🚀 Triggering via Webhook URL (with force pull)..."
+            
+            # Construct optional Bearer Authorization header if token is set
+            AUTH_HEADER=()
+            if [ -n "$COOLIFY_TOKEN" ]; then
+              AUTH_HEADER=(-H "Authorization: Bearer ${COOLIFY_TOKEN}")
+            fi
+
             # Try POST first, fallback to GET if 405
-            RESPONSE=$(curl -s -L -w "\n%{http_code}" -X POST "$CLEAN_URL")
+            RESPONSE=$(curl -s -L -w "\n%{http_code}" -X POST "${AUTH_HEADER[@]}" -H "Content-Type: application/json" -H "Accept: application/json" "$CLEAN_URL")
             HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
             BODY=$(echo "$RESPONSE" | sed '$d')
 
             if [ "$HTTP_CODE" -eq 405 ]; then
               echo "POST not allowed, retrying with GET..."
-              RESPONSE=$(curl -s -L -w "\n%{http_code}" -X GET "$CLEAN_URL")
+              RESPONSE=$(curl -s -L -w "\n%{http_code}" -X GET "${AUTH_HEADER[@]}" -H "Accept: application/json" "$CLEAN_URL")
               HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
               BODY=$(echo "$RESPONSE" | sed '$d')
             fi
@@ -124,6 +131,9 @@ jobs:
             if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
               echo "✅ Coolify deployment successfully triggered via webhook!"
               exit 0
+            elif [ "$HTTP_CODE" -eq 401 ]; then
+              echo "::error::Coolify returned 401 Unauthenticated. Coolify's API endpoint requires a Bearer Token. Please add secret 'COOLIFY_TOKEN' to GitHub Secrets (generated in Coolify -> Keys & Tokens -> API Tokens)."
+              exit 1
             else
               echo "::error::Coolify webhook returned error ${HTTP_CODE}: ${BODY}"
               exit 1
