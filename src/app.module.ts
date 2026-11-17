@@ -51,6 +51,7 @@ import { WebhookEndpoint } from './entities/webhook-endpoint.entity';
 import { SuppressionList } from './entities/suppression-list.entity';
 import { WorkspaceFeature } from './entities/workspace-feature.entity';
 import { ComplianceModule } from './compliance/compliance.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ComplianceModule } from './compliance/compliance.module';
       envFilePath: ['.env', '.env.example'],
     }),
     ScheduleModule.forRoot(),
+    EventsModule,
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,

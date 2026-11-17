@@ -105,7 +105,14 @@ export class OrganizationsService {
       const existing = await this.repo.findOne({ where: { slug: dto.slug } });
       if (existing) throw new ConflictException('Slug already in use');
     }
-    Object.assign(org, dto);
+    const { notificationEmail, ...rest } = dto;
+    Object.assign(org, rest);
+    if (notificationEmail !== undefined) {
+      org.industrySettings = {
+        ...(org.industrySettings ?? {}),
+        notificationEmail: notificationEmail || undefined,
+      };
+    }
     return this.repo.save(org);
   }
 

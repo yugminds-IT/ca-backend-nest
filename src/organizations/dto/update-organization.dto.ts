@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, Matches } from 'class-validator';
+import { IsOptional, IsString, MaxLength, Matches, IsEmail, ValidateIf } from 'class-validator';
 
 export class UpdateOrganizationDto {
   @IsOptional()
@@ -31,4 +31,11 @@ export class UpdateOrganizationDto {
   @IsString()
   @MaxLength(20)
   pincode?: string;
+
+  /** Where to alert on new website form submissions. Empty string clears it, falling back to the admin/SMTP address. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== '')
+  @IsEmail()
+  @MaxLength(255)
+  notificationEmail?: string;
 }
