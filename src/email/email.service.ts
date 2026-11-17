@@ -7,6 +7,16 @@ import type { Transporter } from 'nodemailer';
 import { Organization } from '../entities/organization.entity';
 import { deriveKey, decrypt } from '../common/utils/crypto.util';
 
+/**
+ * FRONTEND_URL should be a single URL, but is sometimes misconfigured as a
+ * comma-separated list (e.g. copied from CORS_ORIGINS). Take only the first
+ * value so links in outgoing emails never end up pointing at "url1,url2".
+ */
+function firstFrontendUrl(raw: string | undefined): string {
+  const first = raw?.split(',')[0]?.trim();
+  return first || 'http://localhost:3000';
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -176,8 +186,7 @@ export class EmailService {
     generatedPassword: string,
     orgId?: number,
   ): Promise<boolean> {
-    const frontendUrl =
-      this.config.get<string>('FRONTEND_URL') ?? 'http://localhost:3000';
+    const frontendUrl = firstFrontendUrl(this.config.get<string>('FRONTEND_URL'));
     const subject = 'Your CA Client Portal Login Credentials';
     const text = `Hello ${name},\n\nYour CA organization has created a client account for you.\n\nLogin URL: ${frontendUrl}\nEmail: ${email}\nTemporary password: ${generatedPassword}\n\nPlease log in and change your password using "Forgot password" if you wish to set a custom password.\n\nKeep this email secure and do not share your password.`;
     const html = `
@@ -401,9 +410,7 @@ export class EmailService {
    * Appends the "Email sent via Lekvya" footer linking to FRONTEND_URL to every outgoing email.
    */
   private appendLekvyaFooter(html?: string, text?: string): { html: string; text: string } {
-    const frontendUrl = (
-      this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000'
-    ).replace(/\/+$/, '');
+    const frontendUrl = firstFrontendUrl(this.config.get<string>('FRONTEND_URL')).replace(/\/+$/, '');
 
     const footerHtml = `
 <div id="lekvya-email-footer" style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #64748b; line-height: 1.5;">
