@@ -7,6 +7,7 @@ import { WebhookEndpoint } from '../../entities/webhook-endpoint.entity';
 import { EmailService } from '../../email/email.service';
 import { ComplianceService } from '../../compliance/compliance.service';
 import { sanitizeHeader, sanitizeRecipients } from '../../common/utils/security-sanitizer.util';
+import { EventsGateway } from '../../events/events.gateway';
 
 export interface QueuedEmailJob {
   messageId: string;
@@ -34,6 +35,7 @@ export class EmailDispatchQueueService {
     private webhookRepo: Repository<WebhookEndpoint>,
     private emailService: EmailService,
     private complianceService: ComplianceService,
+    private readonly eventsGateway: EventsGateway,
   ) {
     // Process queue in background
     setInterval(() => this.processNextBatch(), 1000);
@@ -55,6 +57,12 @@ export class EmailDispatchQueueService {
           log.status = 'failed';
           log.errorMessage = 'Blocked: Recipient has unsubscribed or previously bounced (Suppression List)';
           await this.emailLogRepo.save(log);
+          this.eventsGateway.emitToOrg(job.orgId, 'developer.email.status', {
+            id: log.id,
+            messageId: log.messageId,
+            status: log.status,
+            errorMessage: log.errorMessage,
+          });
         }
         return;
       }
@@ -116,6 +124,12 @@ export class EmailDispatchQueueService {
         log.status = 'delivered';
         log.deliveredAt = new Date();
         await this.emailLogRepo.save(log);
+        this.eventsGateway.emitToOrg(job.orgId, 'developer.email.status', {
+          id: log.id,
+          messageId: log.messageId,
+          status: log.status,
+          deliveredAt: log.deliveredAt,
+        });
       }
       void this.emitWebhook(job.orgId, 'email.delivered', {
         id: job.messageId,
@@ -135,6 +149,12 @@ export class EmailDispatchQueueService {
           log.status = 'failed';
           log.errorMessage = 'SMTP delivery failed after max retries';
           await this.emailLogRepo.save(log);
+          this.eventsGateway.emitToOrg(job.orgId, 'developer.email.status', {
+            id: log.id,
+            messageId: log.messageId,
+            status: log.status,
+            errorMessage: log.errorMessage,
+          });
         }
         void this.emitWebhook(job.orgId, 'email.bounced', {
           id: job.messageId,

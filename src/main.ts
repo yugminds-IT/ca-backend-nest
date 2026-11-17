@@ -20,32 +20,55 @@ async function bootstrap() {
     }),
   );
   const corsOrigins = process.env.CORS_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean) ?? [];
+  const allowedAppOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', ...corsOrigins];
 
-  app.enableCors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-      if (!origin) return callback(null, true);
+  const corsAllowedHeaders = [
+    'Content-Type',
+    'Authorization',
+    'Accept',
+    'X-Public-Key',
+    'X-API-Key',
+    'X-Requested-With',
+  ];
 
-      // Explicitly allow public form and tracking endpoints from any browser origin
-      // (Public Key origin validation takes care of domain whitelisting per customer key)
-      const allowedLocals = ['http://localhost:3000', 'http://127.0.0.1:3000'];
-      if (allowedLocals.includes(origin) || corsOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+  // These are deliberately-public, key-authenticated integration endpoints (form submission,
+  // transactional email API, open/click tracking) that customers embed on their own websites.
+  // Domain whitelisting for them happens per public/secret key inside their handlers, not via CORS,
+  // so they stay open to any browser origin. They never rely on cookies, so no CORS credentials.
+  const openCorsPathPatterns = [
+    /^\/developer\/industries$/,
+    /^\/(api\/v1\/(send-form|forms|submissions)|developer\/send-form)$/,
+    /^\/api\/v1\/emails$/,
+    /^\/api\/v1\/track\/(open|click)\//,
+    /^\/contact(\/|$)/,
+    /^\/api\/v1\/workspace-features(\/|$)/,
+  ];
 
-      // For public API routes and form submissions, allow browser origin
-      return callback(null, true);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'X-Public-Key',
-      'X-API-Key',
-      'X-Requested-With',
-    ],
+  app.enableCors((req: { url?: string }, callback: (err: Error | null, options?: Record<string, unknown>) => void) => {
+    const path = req.url?.split('?')[0] ?? '';
+    const isOpenIntegrationRoute = openCorsPathPatterns.some((pattern) => pattern.test(path));
+
+    if (isOpenIntegrationRoute) {
+      return callback(null, {
+        origin: true,
+        credentials: false,
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allowedHeaders: corsAllowedHeaders,
+      });
+    }
+
+    return callback(null, {
+      origin: (origin: string | undefined, originCallback: (err: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+        if (!origin || allowedAppOrigins.includes(origin)) {
+          return originCallback(null, true);
+        }
+        return originCallback(new Error('Not allowed by CORS'), false);
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: corsAllowedHeaders,
+    });
   });
 
   // Security headers

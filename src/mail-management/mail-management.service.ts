@@ -16,6 +16,7 @@ import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { EmailTemplatesService } from '../email-templates/email-templates.service';
 import { ScheduleEmailDto } from './dto/schedule-email.dto';
+import { EventsGateway } from '../events/events.gateway';
 
 const DELAY_BETWEEN_EMAILS_MS = 2000;
 
@@ -51,7 +52,17 @@ export class MailManagementService {
     @InjectRepository(User)
     private userRepo: Repository<User>,
     private emailTemplatesService: EmailTemplatesService,
+    private readonly eventsGateway: EventsGateway,
   ) {}
+
+  private emitMailStatus(schedule: EmailSchedule) {
+    this.eventsGateway.emitToOrg(schedule.organizationId, 'mail.status', {
+      id: schedule.id,
+      status: schedule.status,
+      sentAt: schedule.sentAt,
+      errorMessage: schedule.errorMessage,
+    });
+  }
 
   /** Client emails + director emails + org user emails for dropdown. Master: all or by org (incl. org mails); Org: their org only. */
   async getRecipients(currentUser: User, organizationId?: number): Promise<RecipientItem[]> {
@@ -546,6 +557,7 @@ export class MailManagementService {
         schedule.status = 'failed';
         schedule.errorMessage = 'Custom email missing subject or body';
         await this.scheduleRepo.save(schedule);
+        this.emitMailStatus(schedule);
         failed++;
         continue;
       }
@@ -555,6 +567,7 @@ export class MailManagementService {
         schedule.status = 'failed';
         schedule.errorMessage = 'Template not found';
         await this.scheduleRepo.save(schedule);
+        this.emitMailStatus(schedule);
         failed++;
         continue;
       }
@@ -624,6 +637,7 @@ export class MailManagementService {
       schedule.sentAt = new Date();
       schedule.errorMessage = lastError;
       await this.scheduleRepo.save(schedule);
+      this.emitMailStatus(schedule);
     }
     return { processed: pending.length, sent, failed };
   }

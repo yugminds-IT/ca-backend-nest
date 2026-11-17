@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Notification } from '../entities/notification.entity';
+import { EventsGateway } from '../events/events.gateway';
 
 export interface CreateNotificationData {
   type?: string;
@@ -22,6 +23,7 @@ export class NotificationsService {
   constructor(
     @InjectRepository(Notification)
     private repo: Repository<Notification>,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   /** Runs every hour — deletes notifications older than 24 hours. */
@@ -35,7 +37,7 @@ export class NotificationsService {
   }
 
   async create(data: CreateNotificationData): Promise<Notification> {
-    return this.repo.save(
+    const notification = await this.repo.save(
       this.repo.create({
         type: data.type ?? 'document_upload',
         organizationId: data.organizationId ?? null,
@@ -48,6 +50,8 @@ export class NotificationsService {
         isRead: false,
       }),
     );
+    this.eventsGateway.emitToOrg(notification.organizationId, 'notification.created', notification);
+    return notification;
   }
 
   async findAll(
