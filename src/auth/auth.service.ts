@@ -393,6 +393,13 @@ export class AuthService {
     if (!user) throw new NotFoundException('User not found');
     if (dto.name !== undefined) user.name = dto.name;
     if (dto.phone !== undefined) user.phone = dto.phone;
+    if (dto.email !== undefined && dto.email.toLowerCase() !== user.email.toLowerCase()) {
+      const existing = await this.userRepo.findOne({ where: { email: dto.email.toLowerCase() } });
+      if (existing && existing.id !== user.id) {
+        throw new ConflictException('Email is already in use by another account');
+      }
+      user.email = dto.email.toLowerCase();
+    }
     await this.userRepo.save(user);
     const updated = await this.userRepo.findOne({
       where: { id: userId },

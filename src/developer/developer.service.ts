@@ -21,6 +21,7 @@ import { EmailService } from '../email/email.service';
 import { EmailDispatchQueueService } from './queue/email-dispatch-queue.service';
 import { ComplianceService } from '../compliance/compliance.service';
 import { BotShieldService } from '../common/services/bot-shield.service';
+import { EventsGateway } from '../events/events.gateway';
 import {
   sanitizeHeader,
   sanitizeRecipients,
@@ -73,6 +74,7 @@ export class DeveloperService {
     private queueService: EmailDispatchQueueService,
     private complianceService: ComplianceService,
     private botShieldService: BotShieldService,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   // ------------------------------------------------------------- API Keys
@@ -354,6 +356,16 @@ export class DeveloperService {
       submittedAt: sub.createdAt,
     });
 
+    // 6b. Push to the developer inbox UI over WebSocket
+    this.eventsGateway.emitToOrg(org.id, 'developer.submission.created', {
+      id: sub.id,
+      formName,
+      senderName,
+      senderEmail: sub.senderEmail,
+      status: sub.status,
+      createdAt: sub.createdAt,
+    });
+
     // 7. Resolve Target Notification Email & Send Alert
     // Priority:
     // a) Direct override in submission: dto.notificationEmail, dto.notifyEmail, dto._notify
@@ -607,6 +619,13 @@ export class DeveloperService {
       metadata: dto.metadata ?? null,
     });
     await this.emailLogRepo.save(log);
+    this.eventsGateway.emitToOrg(orgId, 'developer.email.created', {
+      id: log.id,
+      messageId: log.messageId,
+      to: log.to,
+      subject: log.subject,
+      status: log.status,
+    });
 
     // 5. Asynchronous Queue Dispatch (Instant <30ms API response)
     void this.queueService.enqueue({
