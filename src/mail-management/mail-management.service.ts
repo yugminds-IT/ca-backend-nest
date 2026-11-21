@@ -204,7 +204,7 @@ export class MailManagementService {
       const to = new Date(schedule.toDate);
       if (from > to) return slots;
       const cur = new Date(from);
-      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1); }
+      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setUTCDate(cur.getUTCDate() + 1); }
       return slots;
     }
 
@@ -219,7 +219,7 @@ export class MailManagementService {
       const to = new Date(schedule.toDate);
       if (from > to) return slots;
       const cur = new Date(from);
-      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setDate(cur.getDate() + 1); }
+      while (cur <= to) { pushDate(cur.toISOString().slice(0, 10)); cur.setUTCDate(cur.getUTCDate() + 1); }
       return slots;
     }
 
@@ -235,8 +235,8 @@ export class MailManagementService {
       if (!targetDays.size) return slots;
       const cur = new Date(from);
       while (cur <= to) {
-        if (targetDays.has(cur.getDay())) pushDate(cur.toISOString().slice(0, 10));
-        cur.setDate(cur.getDate() + 1);
+        if (targetDays.has(cur.getUTCDay())) pushDate(cur.toISOString().slice(0, 10));
+        cur.setUTCDate(cur.getUTCDate() + 1);
       }
       return slots;
     }

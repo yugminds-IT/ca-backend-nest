@@ -15,6 +15,9 @@ import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../entities/user.entity';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
+import { RoleName } from '../common/enums/role.enum';
 
 @Controller('auth')
 export class AuthController {
@@ -48,7 +51,9 @@ export class AuthController {
     return this.auth.signupOrganization(dto);
   }
 
-  @Public()
+  // Adding an admin to an existing organization is a master-admin action, never public.
+  @UseGuards(RolesGuard)
+  @Roles(RoleName.MASTER_ADMIN)
   @Post('signup/org-admin')
   signupOrgAdmin(@Body() dto: OrgAdminSignupDto) {
     return this.auth.signupOrgAdmin(dto);
@@ -66,7 +71,9 @@ export class AuthController {
     return this.auth.getRoles();
   }
 
-  @Public()
+  // Creating users with an arbitrary role is a master-admin action, never public.
+  @UseGuards(RolesGuard)
+  @Roles(RoleName.MASTER_ADMIN)
   @Post('register')
   register(@Body() dto: RegisterDto) {
     return this.auth.register(dto);

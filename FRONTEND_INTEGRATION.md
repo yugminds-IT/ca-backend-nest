@@ -94,10 +94,10 @@ type ScheduleType = 'single_date' | 'date_range' | 'multiple_dates';
 | GET | `/auth/me` | JWT | Current user |
 | GET | `/auth/roles` | Public | Roles for dropdown |
 | GET | `/auth/organizations` | Public | Organizations for dropdown |
-| POST | `/auth/register` | Public | Generic registration |
-| POST | `/auth/signup/master-admin` | Public | Master admin signup |
+| POST | `/auth/register` | Master admin | Create a user with any role |
+| POST | `/auth/signup/master-admin` | Public (first master admin only) | Master admin signup; 403 once one exists |
 | POST | `/auth/signup/organization` | Public | Organization + admin signup |
-| POST | `/auth/signup/org-admin` | Public | Org admin signup (existing org) |
+| POST | `/auth/signup/org-admin` | Master admin | Add an admin to an existing org |
 | POST | `/auth/forgot-password` | Public | Request OTP for password reset |
 | POST | `/auth/reset-password` | Public | Reset password with OTP |
 

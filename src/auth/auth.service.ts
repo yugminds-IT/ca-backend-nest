@@ -188,6 +188,10 @@ export class AuthService {
     if (existing) throw new ConflictException('Email already registered');
     const role = await this.roleRepo.findOne({ where: { name: RoleName.MASTER_ADMIN } });
     if (!role) throw new BadRequestException('Master admin role not found');
+    // Public only for first-time setup: once any master admin exists, new ones are created via /auth/register.
+    // ponytail: count-then-insert can race if two first signups land together; add a DB lock if that ever matters.
+    const existingMasterAdmins = await this.userRepo.count({ where: { roleId: role.id } });
+    if (existingMasterAdmins > 0) throw new ForbiddenException('Master admin signup is closed');
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const user = await this.userRepo.save(
       this.userRepo.create({
