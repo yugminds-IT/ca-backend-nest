@@ -50,8 +50,15 @@ import { ContactList } from './entities/contact-list.entity';
 import { WebhookEndpoint } from './entities/webhook-endpoint.entity';
 import { SuppressionList } from './entities/suppression-list.entity';
 import { WorkspaceFeature } from './entities/workspace-feature.entity';
+import { PricingPlan } from './entities/pricing-plan.entity';
+import { PricingPlansModule } from './pricing-plans/pricing-plans.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { EventsModule } from './events/events.module';
+import { CustomVariablesModule } from './custom-variables/custom-variables.module';
+import { ClientCustomValue, CustomVariable } from './entities/custom-variable.entity';
+import { Segment } from './entities/segment.entity';
+import { EmailDraft } from './entities/email-draft.entity';
+import { EmailDelivery } from './entities/email-delivery.entity';
 
 @Module({
   imports: [
@@ -62,6 +69,7 @@ import { EventsModule } from './events/events.module';
     }),
     ScheduleModule.forRoot(),
     EventsModule,
+    CustomVariablesModule,
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
@@ -90,6 +98,12 @@ import { EventsModule } from './events/events.module';
         WebhookEndpoint,
         SuppressionList,
         WorkspaceFeature,
+        PricingPlan,
+        CustomVariable,
+        ClientCustomValue,
+        Segment,
+        EmailDraft,
+        EmailDelivery,
       ],
       synchronize: false,
       logging: false,
@@ -104,6 +118,8 @@ import { EventsModule } from './events/events.module';
         // Keep idle connections alive — prevents remote DB from closing them
         keepAlive: true,
         keepAliveInitialDelayMillis: 10000,
+        // Session TZ = UTC so now()/CURRENT_TIMESTAMP in `timestamp` columns match Node (TZ=UTC).
+        options: '-c timezone=UTC',
         // SSL (required for Supabase / remote Postgres)
         ...(process.env.DB_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
       },
@@ -121,6 +137,7 @@ import { EventsModule } from './events/events.module';
     EmailTemplatesModule,
     MailManagementModule,
     MasterAdminModule,
+    PricingPlansModule,
     ContactModule,
     NotificationsModule,
     DashboardModule,

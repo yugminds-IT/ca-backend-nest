@@ -17,5 +17,8 @@ export default new DataSource({
   migrations: ['src/migrations/*.ts'],
   synchronize: false,
   logging: process.env.NODE_ENV === 'development',
-  extra: process.env.DB_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : undefined,
+  extra: {
+    options: '-c timezone=UTC', // match app.module: now() defaults in UTC
+    ...(process.env.DB_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
+  },
 });

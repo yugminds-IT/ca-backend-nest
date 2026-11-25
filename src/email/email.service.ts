@@ -12,7 +12,7 @@ import { deriveKey, decrypt } from '../common/utils/crypto.util';
  * comma-separated list (e.g. copied from CORS_ORIGINS). Take only the first
  * value so links in outgoing emails never end up pointing at "url1,url2".
  */
-function firstFrontendUrl(raw: string | undefined): string {
+export function firstFrontendUrl(raw: string | undefined): string {
   const first = raw?.split(',')[0]?.trim();
   return first || 'http://localhost:3000';
 }
@@ -119,6 +119,8 @@ export class EmailService {
     orgId?: number,
     cc?: string | string[],
     bcc?: string | string[],
+    attachments?: { filename: string; content: Buffer; contentType?: string }[],
+    replyTo?: string | null,
   ): Promise<boolean> {
     let transporter: Transporter | null = null;
     let fromAddress = this.globalFrom;
@@ -161,6 +163,8 @@ export class EmailService {
       if (bcc && (Array.isArray(bcc) ? bcc.length > 0 : bcc.trim())) {
         mailOptions.bcc = Array.isArray(bcc) ? bcc.join(', ') : bcc;
       }
+      if (attachments?.length) mailOptions.attachments = attachments;
+      if (replyTo?.trim()) mailOptions.replyTo = replyTo.trim();
       await transporter.sendMail(mailOptions);
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return true;

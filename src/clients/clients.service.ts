@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { Client } from '../entities/client.entity';
@@ -12,6 +12,8 @@ import { CreateClientWithLoginDto } from './dto/create-client-with-login.dto';
 import { OnboardClientDto } from './dto/onboard-client.dto';
 import { CreateDirectorDto, UpdateDirectorDto } from './dto/onboard-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { BulkTagDto } from './dto/bulk-tag.dto';
+import { applyTagChange, normalizeTags } from './tags';
 import { RoleName } from '../common/enums/role.enum';
 import { Service } from '../entities/service.entity';
 import { ClientDirector } from '../entities/client-director.entity';
@@ -186,6 +188,7 @@ export class ClientsService {
       onboardDate: dto.onboardDate ? new Date(dto.onboardDate) : null,
       followupDate: dto.followupDate ? new Date(dto.followupDate) : null,
       additionalNotes: dto.additionalNotes ?? null,
+      tags: normalizeTags(dto.tags),
     });
     const saved = await this.repo.save(client);
     if (dto.serviceIds?.length) {
@@ -266,6 +269,20 @@ export class ClientsService {
     return { exists: !!user };
   }
 
+  /** Add and/or remove tags on many clients at once. Clients outside the caller's organization are skipped. */
+  async bulkTag(dto: BulkTagDto, currentUser: User): Promise<{ updated: number }> {
+    if (!dto.add?.length && !dto.remove?.length) throw new BadRequestException('Give tags to add or remove');
+    const ids = [...new Set(dto.clientIds)];
+    const clients = await this.repo.find({ where: { id: In(ids) }, select: ['id', 'organizationId', 'tags'] });
+    const changed = clients
+      .filter((c) => this.canAccessOrg(currentUser, c.organizationId))
+      .map((c) => ({ c, next: applyTagChange(c.tags ?? [], dto.add, dto.remove) }))
+      .filter(({ c, next }) => next.join('\u0000') !== (c.tags ?? []).join('\u0000'));
+    // ponytail: one UPDATE per changed client; switch to array SQL (array_cat/array_remove) if orgs tag 10k+ at once
+    for (const { c, next } of changed) await this.repo.update({ id: c.id }, { tags: next });
+    return { updated: changed.length };
+  }
+
   async findAll(currentUser: User, organizationId?: string): Promise<ClientResponse[]> {
     let list: Client[];
     if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
@@ -337,7 +354,8 @@ export class ClientsService {
         throw new ForbiddenException('Access denied');
       }
     }
-    const { serviceIds, onboardDate, followupDate, directors: directorsDto, login_email: loginEmail, login_password: loginPassword, remove_login: removeLogin, ...rest } = dto;
+    const { serviceIds, onboardDate, followupDate, directors: directorsDto, login_email: loginEmail, login_password: loginPassword, remove_login: removeLogin, tags, ...rest } = dto;
+    if (tags !== undefined && currentUser.role?.name !== RoleName.CLIENT) client.tags = normalizeTags(tags);
     // Filter out undefined values — Object.assign would otherwise overwrite entity fields
     // (e.g. userId) with undefined when only a subset of DTO fields are sent in the request.
     const definedRest = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));

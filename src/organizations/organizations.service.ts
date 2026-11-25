@@ -11,7 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Organization } from '../entities/organization.entity';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
-import { SmtpConfigDto, TestSmtpDto } from './dto/smtp-config.dto';
+import { MailIdentityDto, SmtpConfigDto, TestSmtpDto } from './dto/smtp-config.dto';
 import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { EmailService } from '../email/email.service';
@@ -140,6 +140,24 @@ export class OrganizationsService {
       currentUser.role?.name === RoleName.MASTER_ADMIN ||
       currentUser.organizationId === orgId
     );
+  }
+
+  /** Reply-to and signature for emails to clients */
+  async getMailIdentity(id: number, currentUser: User) {
+    if (!this.canViewSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    const org = await this.repo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organization not found');
+    return { replyTo: org.mailReplyTo ?? '', signature: org.mailSignature ?? '' };
+  }
+
+  async saveMailIdentity(id: number, dto: MailIdentityDto, currentUser: User) {
+    if (!this.canManageSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    const org = await this.repo.findOne({ where: { id } });
+    if (!org) throw new NotFoundException('Organization not found');
+    if (dto.replyTo !== undefined) org.mailReplyTo = dto.replyTo.trim() || null;
+    if (dto.signature !== undefined) org.mailSignature = dto.signature.trim() || null;
+    await this.repo.save(org);
+    return { replyTo: org.mailReplyTo ?? '', signature: org.mailSignature ?? '' };
   }
 
   /** Return SMTP config with password masked */

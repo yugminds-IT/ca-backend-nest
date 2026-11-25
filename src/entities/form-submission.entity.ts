@@ -53,10 +53,10 @@ export class FormSubmission {
   @Column({ type: 'varchar', length: 20, default: 'new' })
   status: FormSubmissionStatus;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE' })

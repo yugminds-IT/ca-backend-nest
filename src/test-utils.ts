@@ -11,6 +11,8 @@ export function mockRepo() {
     findBy: jest.fn(),
     count: jest.fn(),
     delete: jest.fn(),
+    update: jest.fn(),
+    upsert: jest.fn(),
     remove: jest.fn(),
     create: jest.fn((x: any) => ({ ...x })),
     save: jest.fn((x: any) =>

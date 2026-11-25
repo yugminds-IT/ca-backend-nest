@@ -77,6 +77,18 @@ export class ComplianceController {
     return this.complianceService.listSuppressions(user.organizationId!, search);
   }
 
+  /** For the send screen: which of these recipients are unsubscribed or bounced. */
+  @UseGuards(JwtAuthGuard)
+  @Post('compliance/suppressions/check')
+  async checkSuppressions(@CurrentUser() user: User, @Body('emails') emails: unknown) {
+    if (!Array.isArray(emails) || emails.length > 50000 || emails.some((e) => typeof e !== 'string' || e.length > 320)) {
+      throw new BadRequestException('emails must be a list of up to 50,000 addresses');
+    }
+    if (user.organizationId == null) return { suppressed: [] }
+    const found = await this.complianceService.suppressedAmong(user.organizationId, emails as string[])
+    return { suppressed: [...found].map(([email, reason]) => ({ email, reason })) }
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('compliance/suppressions')
   addSuppression(

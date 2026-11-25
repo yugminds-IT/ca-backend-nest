@@ -41,7 +41,7 @@ export class Notification {
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE', nullable: true })

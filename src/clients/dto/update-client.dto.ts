@@ -7,9 +7,11 @@ import {
   IsBoolean,
   IsDateString,
   IsArray,
+  ArrayMaxSize,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { MAX_TAG_LENGTH, MAX_TAGS } from '../tags';
 import { Type } from 'class-transformer';
 import { OnboardDirectorDto } from './onboard-client.dto';
 
@@ -121,4 +123,12 @@ export class UpdateClientDto {
   @ValidateNested({ each: true })
   @Type(() => OnboardDirectorDto)
   directors?: OnboardDirectorDto[];
+
+  /** Free labels for grouping ("VIP", "Class 10"); staff-only, a client can't change their own */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_TAGS)
+  @IsString({ each: true })
+  @MaxLength(MAX_TAG_LENGTH, { each: true })
+  tags?: string[];
 }

@@ -39,10 +39,10 @@ export class ClientDirector {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'aadharNumber' })
   aadharNumber: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @Exclude()

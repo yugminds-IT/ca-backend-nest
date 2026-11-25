@@ -36,7 +36,7 @@ export class ClientFile {
   @Column({ type: 'varchar', length: 255, name: 's3Bucket' })
   s3Bucket: string;
 
-  @Column({ type: 'timestamp', name: 'uploadedAt', default: () => 'CURRENT_TIMESTAMP' })
+  @Column({ type: 'timestamptz', name: 'uploadedAt', default: () => 'CURRENT_TIMESTAMP' })
   uploadedAt: Date;
 
   @ManyToOne(() => Client, (c) => c.files, { onDelete: 'CASCADE' })

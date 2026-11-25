@@ -53,10 +53,10 @@ export class GstFilingSession {
   @Column({ type: 'varchar', length: 100, nullable: true })
   celeryTaskId: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Client)

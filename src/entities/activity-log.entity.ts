@@ -50,7 +50,7 @@ export class ActivityLog {
   @Column({ type: 'boolean', default: false })
   isError: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   @Index()
   createdAt: Date;
 }

@@ -8,15 +8,70 @@ import {
   IsObject,
   IsIn,
   ArrayMinSize,
+  ArrayMaxSize,
   ValidateNested,
   Min,
   Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { Matches, MaxLength } from 'class-validator';
+import { AttachmentRefDto, BulkRecipientDto, BulkSegmentDto } from './send-bulk.dto';
+
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A repeating email: fires on matching local dates at each of `times` until it ends */
+export class RepeatRuleDto {
+  @IsIn(['day', 'week', 'month', 'quarter', 'year'])
+  every: 'day' | 'week' | 'month' | 'quarter' | 'year';
+
+  /** Months it may fire in, 1–12 (all 12 for daily/weekly/monthly) */
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(12, { each: true })
+  months: number[];
+
+  /** Days of the month, 1–31, or -1 for the last day. Ignored when `weekdays` is set. */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(-1, { each: true })
+  @Max(31, { each: true })
+  days?: number[];
+
+  /** 0 = Sunday … 6 = Saturday */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  weekdays?: number[];
+
+  @Matches(DATE)
+  startDate: string;
+
+  @IsOptional()
+  @Matches(DATE)
+  endDate?: string;
+
+  /** Stop after this many sends */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  count?: number;
+}
 
 export class ScheduleSlotDto {
-  @IsIn(['single_date', 'date_range', 'multiple_dates', 'daily', 'weekly', 'monthly'])
-  type: 'single_date' | 'date_range' | 'multiple_dates' | 'daily' | 'weekly' | 'monthly';
+  @IsIn(['single_date', 'date_range', 'multiple_dates', 'daily', 'weekly', 'monthly', 'repeat'])
+  type: 'single_date' | 'date_range' | 'multiple_dates' | 'daily' | 'weekly' | 'monthly' | 'repeat';
+
+  /** For repeat */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RepeatRuleDto)
+  repeat?: RepeatRuleDto;
 
   /** For single_date: YYYY-MM-DD */
   @IsOptional()
@@ -99,14 +154,48 @@ export class ScheduleEmailDto {
   @IsString()
   body?: string;
 
+  /** Plain recipient list sharing `variables`. Omit when sending `recipients`. */
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @IsEmail({}, { each: true })
-  recipientEmails: string[];
+  recipientEmails?: string[];
+
+  /** Many recipients in one call, each with their own variables (preferred). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10000)
+  @ValidateNested({ each: true })
+  @Type(() => BulkRecipientDto)
+  recipients?: BulkRecipientDto[];
+
+  /** Everyone matching these rules when each slot goes out (one-off schedules only, not monthly) */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BulkSegmentDto)
+  segment?: BulkSegmentDto;
+
+  /** Files every recipient gets (one-off schedules only, not monthly) */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentRefDto)
+  attachments?: AttachmentRefDto[];
 
   @IsOptional()
   @IsObject()
   variables?: Record<string, string>;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  cc?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  bcc?: string;
 
   @ValidateNested()
   @Type(() => ScheduleSlotDto)

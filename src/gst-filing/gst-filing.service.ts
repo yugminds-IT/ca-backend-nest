@@ -202,7 +202,7 @@ export class GstFilingService {
         const month = Number(mm);
         const year  = Number(yyyy);
         const d = new Date(year, month - 1);
-        session.period = d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+        session.period = d.toLocaleString('en-IN', { month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
         const fyStart = month >= 4 ? year : year - 1;
         session.financialYear = `${fyStart}-${String(fyStart + 1).slice(2)}`;
       }

@@ -23,10 +23,10 @@ export class Service {
   @Column({ type: 'varchar', length: 50, nullable: true })
   industry: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE', nullable: true })

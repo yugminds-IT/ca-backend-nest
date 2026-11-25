@@ -7,10 +7,12 @@ import {
   IsIn,
   IsDateString,
   IsArray,
+  ArrayMaxSize,
   MaxLength,
   ValidateNested,
   ValidateIf,
 } from 'class-validator';
+import { MAX_TAG_LENGTH, MAX_TAGS } from '../tags';
 import { Type } from 'class-transformer';
 const STATUSES = ['active', 'inactive', 'terminated'] as const;
 
@@ -52,6 +54,14 @@ export class OnboardDirectorDto {
 }
 
 export class OnboardClientDto {
+  /** Free labels for grouping ("VIP", "Class 10"); staff-only, a client can't change their own */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_TAGS)
+  @IsString({ each: true })
+  @MaxLength(MAX_TAG_LENGTH, { each: true })
+  tags?: string[];
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)

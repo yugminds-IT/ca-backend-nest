@@ -15,8 +15,12 @@ import { UpdateEmailTemplateDto, validateTemplateTypeForUpdate } from './dto/upd
 import { RoleName } from '../common/enums/role.enum';
 import { TemplateCategory } from './constants/template-category.enum';
 import { TEMPLATE_TYPES_BY_CATEGORY } from './constants/template-type.enum';
-import { TEMPLATE_VARIABLES } from './constants/template-variables';
+import { TEMPLATE_VARIABLES, TemplateVariable } from './constants/template-variables';
 import { EmailService } from '../email/email.service';
+import { CustomVariablesService } from '../custom-variables/custom-variables.service';
+import { escapeHtml, isHtmlBody, mergeVariables, renderEmail, systemVariables, withSignature, type MailIdentity } from './template-render';
+
+type MailAttachment = { filename: string; content: Buffer; contentType?: string };
 
 @Injectable()
 export class EmailTemplatesService {
@@ -28,6 +32,7 @@ export class EmailTemplatesService {
     @InjectRepository(Organization)
     private organizationRepo: Repository<Organization>,
     private emailService: EmailService,
+    private customVariables: CustomVariablesService,
   ) {}
 
   /** Dropdown: categories with labels */
@@ -50,8 +55,20 @@ export class EmailTemplatesService {
   }
 
   /** Dropdown: available variables */
-  getVariables(): { key: string; label: string }[] {
+  getVariables(): TemplateVariable[] {
     return [...TEMPLATE_VARIABLES];
+  }
+
+  /** Server-known values (dates, FY, portal URL). Caller-supplied non-empty values override them. */
+  systemVariables(): Record<string, string> {
+    const frontendUrl = process.env.FRONTEND_URL?.split(',')[0]?.trim() || 'http://localhost:3000';
+    return systemVariables(new Date(), frontendUrl, process.env.APP_TIMEZONE || 'Asia/Kolkata');
+  }
+
+  /** Substitute variables (escaping values for HTML bodies, blanking unknown ones) and build the email. */
+  private render(subject: string, body: string, variables: Record<string, string>) {
+    const r = renderEmail(subject, body, mergeVariables(this.systemVariables(), variables));
+    return { subject: r.subject, html: this.toProfessionalHtml(r.subject, r.body, r.isHtml), text: r.text };
   }
 
   async create(dto: CreateEmailTemplateDto, currentUser: User): Promise<EmailTemplate> {
@@ -130,8 +147,15 @@ export class EmailTemplatesService {
     return template;
   }
 
-  async update(id: number, dto: UpdateEmailTemplateDto, currentUser: User): Promise<EmailTemplate> {
+  /** Like findOne, but only for templates the user may change (shared master templates are read-only for orgs). */
+  private async findModifiable(id: number, currentUser: User): Promise<EmailTemplate> {
     const template = await this.findOne(id, currentUser);
+    if (!this.canModify(currentUser, template)) throw new ForbiddenException('Shared templates cannot be modified');
+    return template;
+  }
+
+  async update(id: number, dto: UpdateEmailTemplateDto, currentUser: User): Promise<EmailTemplate> {
+    const template = await this.findModifiable(id, currentUser);
     if (dto.category != null && dto.type != null && !validateTemplateTypeForUpdate(dto.category, dto.type)) {
       throw new BadRequestException(`Invalid type '${dto.type}' for category '${dto.category}'`);
     }
@@ -144,7 +168,7 @@ export class EmailTemplatesService {
   }
 
   async remove(id: number, currentUser: User): Promise<void> {
-    const template = await this.findOne(id, currentUser);
+    const template = await this.findModifiable(id, currentUser);
     await this.repo.remove(template);
   }
 
@@ -164,7 +188,8 @@ export class EmailTemplatesService {
     let html: string;
     let text: string;
 
-    const enriched = { ...variables };
+    // org's custom variables (default / this client's value) < values sent by the caller < org values below
+    const enriched = mergeVariables(await this.customVariables.valuesFor(currentUser.organizationId, to), variables);
     if (currentUser.organizationId != null) {
       const org = await this.organizationRepo.findOne({ where: { id: currentUser.organizationId } });
       enriched.org_name = org?.name ?? '';
@@ -178,17 +203,11 @@ export class EmailTemplatesService {
       const template = await this.repo.findOne({ where: { id: templateIdOrNull } });
       if (!template) throw new NotFoundException('Template not found');
       if (!this.canAccess(currentUser, template)) throw new ForbiddenException('Access denied to this template');
-      subject = this.substituteVariables(template.subject, enriched);
-      const body = this.substituteVariables(template.body, enriched);
-      html = this.toProfessionalHtml(subject, body);
-      text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      ({ subject, html, text } = this.render(template.subject, template.body, enriched));
     } else {
       if (!customSubject?.trim()) throw new BadRequestException('Subject is required for custom emails');
       if (!customBody?.trim()) throw new BadRequestException('Body is required for custom emails');
-      subject = this.substituteVariables(customSubject.trim(), enriched);
-      const body = this.substituteVariables(customBody.trim(), enriched);
-      html = this.toProfessionalHtml(subject, body);
-      text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      ({ subject, html, text } = this.render(customSubject.trim(), customBody.trim(), enriched));
     }
 
     const sent = await this.emailService.sendMail(
@@ -229,12 +248,13 @@ export class EmailTemplatesService {
     variables: Record<string, string> = {},
     fromName?: string,
     orgId?: number,
+    cc?: string,
+    bcc?: string,
+    attachments?: MailAttachment[],
+    identity?: MailIdentity,
   ): Promise<boolean> {
-    const resolvedSubject = this.substituteVariables(subject, variables);
-    const resolvedBody = this.substituteVariables(body, variables);
-    const html = this.toProfessionalHtml(resolvedSubject, resolvedBody);
-    const text = resolvedBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return this.emailService.sendMail(to, resolvedSubject, text, html, fromName, orgId);
+    const r = this.render(subject, withSignature(body, identity?.signature), variables);
+    return this.emailService.sendMail(to, r.subject, r.text, r.html, fromName, orgId, cc, bcc, attachments, identity?.replyTo);
   }
 
   /** Internal: send one email using template + variables (no user check). Used by schedule processor. */
@@ -244,37 +264,17 @@ export class EmailTemplatesService {
     variables: Record<string, string> = {},
     fromName?: string,
     orgId?: number,
+    cc?: string,
+    bcc?: string,
+    attachments?: MailAttachment[],
+    identity?: MailIdentity,
   ): Promise<boolean> {
-    const subject = this.substituteVariables(template.subject, variables);
-    const body = this.substituteVariables(template.body, variables);
-    const html = this.toProfessionalHtml(subject, body);
-    const text = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    return this.emailService.sendMail(to, subject, text, html, fromName, orgId);
-  }
-
-  /** Replace {{ key }} with values; allows optional spaces inside braces. Keys are bare names e.g. client_name or already {{client_name}}. */
-  substituteVariables(content: string, variables: Record<string, string>): string {
-    let result = content;
-    const entries = Object.entries(variables).sort((a, b) => b[0].length - a[0].length);
-    for (const [key, value] of entries) {
-      let bare = key.trim();
-      if (bare.startsWith('{{')) bare = bare.slice(2);
-      if (bare.endsWith('}}')) bare = bare.slice(0, -2);
-      bare = bare.trim();
-      if (!bare) continue;
-      const re = new RegExp(`\\{\\{\\s*${this.escapeRegExp(bare)}\\s*\\}\\}`, 'g');
-      result = result.replace(re, value ?? '');
-    }
-    return result;
-  }
-
-  private escapeRegExp(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const r = this.render(template.subject, withSignature(template.body, identity?.signature), variables);
+    return this.emailService.sendMail(to, r.subject, r.text, r.html, fromName, orgId, cc, bcc, attachments, identity?.replyTo);
   }
 
   /** Strip editor-specific attributes (class, data-*) from HTML, or convert plain text to HTML. */
-  private sanitizeBody(body: string): string {
-    const hasHtml = /<[a-z][\s\S]*?>/i.test(body);
+  private sanitizeBody(body: string, hasHtml = isHtmlBody(body)): string {
     if (!hasHtml) {
       // Plain text: double newline = new paragraph, single newline = <br>
       const paragraphs = body.split(/\n\n+/);
@@ -296,9 +296,9 @@ export class EmailTemplatesService {
   }
 
   /** Wrap body in a clean HTML email layout — no decorative header, no blue bar, no box. */
-  toProfessionalHtml(subject: string, body: string): string {
+  toProfessionalHtml(subject: string, body: string, hasHtml?: boolean): string {
     const escapedSubject = this.escapeHtml(subject);
-    const sanitizedBody = this.sanitizeBody(body);
+    const sanitizedBody = this.sanitizeBody(body, hasHtml);
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -324,17 +324,16 @@ export class EmailTemplatesService {
   }
 
   private escapeHtml(s: string): string {
-    return s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+    return escapeHtml(s);
   }
 
   private canAccess(user: User, template: EmailTemplate): boolean {
     if (user.role?.name === RoleName.MASTER_ADMIN) return true;
     if (template.organizationId == null) return true;
     return user.organizationId === template.organizationId;
+  }
+  private canModify(user: User, template: EmailTemplate): boolean {
+    if (user.role?.name === RoleName.MASTER_ADMIN) return true;
+    return template.organizationId != null && user.organizationId === template.organizationId;
   }
 }

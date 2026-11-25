@@ -34,7 +34,7 @@ export class SuppressionList {
   @Column({ type: 'varchar', length: 150, nullable: true })
   source: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE' })

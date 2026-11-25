@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany,
 } from 'typeorm';
+import { Exclude } from 'class-transformer';
 import { User } from './user.entity';
 import { Client } from './client.entity';
 
@@ -45,11 +46,21 @@ export class Organization {
   @Column({ type: 'varchar', length: 255, nullable: true })
   smtpUser: string | null;
 
+  /** Encrypted SMTP password: used to send mail, never returned in an API response. */
+  @Exclude({ toPlainOnly: true })
   @Column({ type: 'varchar', length: 1000, nullable: true })
   smtpPass: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   smtpFrom: string | null;
+
+  /** Where client replies go (Reply-To); null = to the sender */
+  @Column({ type: 'varchar', length: 320, nullable: true })
+  mailReplyTo: string | null;
+
+  /** Plain-text sign-off added to every email sent to clients; may use {{variables}} */
+  @Column({ type: 'text', nullable: true })
+  mailSignature: string | null;
 
   /** Self-service signups start as `pending` until master admin approves. */
   @Column({ type: 'varchar', length: 20, default: 'approved' })
@@ -74,10 +85,10 @@ export class Organization {
   @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
   allowedOrigins: string[];
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @OneToMany(() => User, (user) => user.organization)

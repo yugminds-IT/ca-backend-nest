@@ -2,6 +2,7 @@
 process.env.TZ = 'UTC';
 
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -9,6 +10,8 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // A 1,000-recipient bulk send with per-client variables is a few hundred KB (default limit 100KB)
+  (app as NestExpressApplication).useBodyParser('json', { limit: '5mb' });
   app.useGlobalInterceptors(
     new ClassSerializerInterceptor(app.get(Reflector)),
   );

@@ -36,10 +36,10 @@ export class EmailTemplate {
   @Column('int', { name: 'organizationId', nullable: true })
   organizationId: number | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE', nullable: true })

@@ -39,10 +39,10 @@ export class User {
   @Column('int', { name: 'organizationId', nullable: true })
   organizationId: number | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Role, (role) => role.users, { onDelete: 'RESTRICT' })

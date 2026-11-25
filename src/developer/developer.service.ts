@@ -816,7 +816,7 @@ export class DeveloperService {
     }
 
     // Prepare inquiry timestamp & details
-    const timestampStr = new Date(sub.createdAt || Date.now()).toLocaleString();
+    const timestampStr = new Date(sub.createdAt || Date.now()).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     const inquiryNote = [
       `\n\n[Website Form Submission #${sub.id} - ${timestampStr}]`,
       `Form Name: ${sub.formName || 'Website Form'}`,

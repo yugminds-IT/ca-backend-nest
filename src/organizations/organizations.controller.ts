@@ -8,11 +8,12 @@ import {
   Delete,
   UseGuards,
   ParseIntPipe,
+  Put,
 } from '@nestjs/common';
 import { OrganizationsService } from './organizations.service';
 import { CreateOrganizationDto } from './dto/create-organization.dto';
 import { UpdateOrganizationDto } from './dto/update-organization.dto';
-import { SmtpConfigDto, TestSmtpDto } from './dto/smtp-config.dto';
+import { MailIdentityDto, SmtpConfigDto, TestSmtpDto } from './dto/smtp-config.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -61,6 +62,16 @@ export class OrganizationsController {
   }
 
   // ─── SMTP Config ──────────────────────────────────────────────────────────
+
+  @Get(':id/mail-identity')
+  getMailIdentity(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.organizations.getMailIdentity(id, user);
+  }
+
+  @Put(':id/mail-identity')
+  saveMailIdentity(@Param('id', ParseIntPipe) id: number, @Body() dto: MailIdentityDto, @CurrentUser() user: User) {
+    return this.organizations.saveMailIdentity(id, dto, user);
+  }
 
   @Get(':id/smtp-config')
   getSmtpConfig(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {

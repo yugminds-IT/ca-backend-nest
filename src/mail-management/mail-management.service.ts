@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual } from 'typeorm';
+import { Repository, LessThanOrEqual, In } from 'typeorm';
 import { Client } from '../entities/client.entity';
 import { ClientDirector } from '../entities/client-director.entity';
 import { EmailSchedule, EmailScheduleStatus } from '../entities/email-schedule.entity';
@@ -16,7 +16,51 @@ import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { EmailTemplatesService } from '../email-templates/email-templates.service';
 import { ScheduleEmailDto } from './dto/schedule-email.dto';
+import { SendBulkDto } from './dto/send-bulk.dto';
 import { EventsGateway } from '../events/events.gateway';
+import { decryptPlainPassword } from '../common/encryption';
+import { mergeVariables, usedVariables } from '../email-templates/template-render';
+import { CustomVariablesService, RESERVED_KEYS } from '../custom-variables/custom-variables.service';
+import { S3Service } from '../s3/s3.service';
+import { ComplianceService } from '../compliance/compliance.service';
+import { AttachmentRef, checkAttachmentRefs } from './mail-attachments';
+import { SegmentsService } from '../clients/segments.service';
+import { localDay } from '../clients/segment-rules';
+import { clientVariables } from '../clients/client-variables';
+import { firstFrontendUrl } from '../email/email.service';
+import type { BulkSegmentDto } from './dto/send-bulk.dto';
+import type { ScheduleSegment } from '../entities/email-schedule.entity';
+import { EmailDelivery, DeliveryStatus } from '../entities/email-delivery.entity';
+import { randomUUID } from 'crypto';
+import { Logger } from '@nestjs/common';
+import { firesOn } from './repeat-rule';
+
+/** One entry per unique (lower-cased) email; first occurrence's variables and files win. */
+const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+
+/** Every Cc/Bcc entry ("a@b.com" or "Name <a@b.com>", comma/semicolon separated) must be an address. */
+export function checkCopyAddresses(cc?: string | null, bcc?: string | null) {
+  for (const [name, value] of [['Cc', cc], ['Bcc', bcc]] as const) {
+    for (const piece of (value ?? '').split(/[,;\n]+/)) {
+      const p = piece.trim();
+      if (!p) continue;
+      const addr = (p.match(/<([^>]*)>/)?.[1] ?? p).trim();
+      if (!EMAIL.test(addr)) throw new BadRequestException(`${name} has something that isn't an email address: ${p}`);
+    }
+  }
+}
+
+function collectRecipients(recipients: { email: string; variables?: Record<string, string>; attachments?: AttachmentRef[] }[]) {
+  const recipientVariables: Record<string, Record<string, string>> = {};
+  const recipientAttachments: Record<string, AttachmentRef[]> = {};
+  for (const r of recipients) {
+    const email = r.email.trim().toLowerCase();
+    if (email in recipientVariables) continue;
+    recipientVariables[email] = r.variables ?? {};
+    if (r.attachments?.length) recipientAttachments[email] = r.attachments;
+  }
+  return { recipientVariables, recipientAttachments, recipientEmails: Object.keys(recipientVariables) };
+}
 
 const DELAY_BETWEEN_EMAILS_MS = 2000;
 
@@ -53,7 +97,101 @@ export class MailManagementService {
     private userRepo: Repository<User>,
     private emailTemplatesService: EmailTemplatesService,
     private readonly eventsGateway: EventsGateway,
+    private customVariables: CustomVariablesService,
+    private s3: S3Service,
+    private compliance: ComplianceService,
+    private segments: SegmentsService,
+    @InjectRepository(EmailDelivery)
+    private deliveryRepo: Repository<EmailDelivery>,
   ) {}
+
+  private readonly logger = new Logger(MailManagementService.name);
+
+  /** Note what happened to one recipient. Never stops a send: the email itself matters more than the record. */
+  private async record(scheduleId: number, email: string, status: DeliveryStatus, reason: string | null = null) {
+    try {
+      await this.deliveryRepo.upsert({ scheduleId, email, status, reason, at: new Date() }, ['scheduleId', 'email']);
+    } catch (e) {
+      this.logger.warn(`Could not record delivery for schedule ${scheduleId}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  async deliveries(id: number, currentUser: User) {
+    await this.getSchedule(id, currentUser); // access check
+    return this.deliveryRepo.find({ where: { scheduleId: id }, order: { id: 'ASC' } });
+  }
+
+  /** Queue the same email again, now, for the recipients it failed for (not skipped ones), in the same batch. */
+  async resendFailed(id: number, currentUser: User) {
+    const s = await this.getSchedule(id, currentUser);
+    const failed = (await this.deliveryRepo.find({ where: { scheduleId: id, status: 'failed' } })).map((d) => d.email);
+    if (!failed.length) throw new BadRequestException('Nobody to resend to: no recipient failed.');
+    const pick = <T>(m: Record<string, T> | null) => (m ? Object.fromEntries(failed.filter((e) => e in m).map((e) => [e, m[e]])) : null);
+    const saved = await this.scheduleRepo.save(this.scheduleRepo.create({
+      templateId: s.templateId,
+      subject: s.subject,
+      body: s.body,
+      recipientEmails: failed,
+      variables: s.variables,
+      recipientVariables: pick(s.recipientVariables),
+      attachments: s.attachments,
+      recipientAttachments: pick(s.recipientAttachments),
+      // Cc/Bcc already got a copy the first time
+      scheduledAt: new Date(),
+      status: 'pending',
+      progress: 0,
+      organizationId: s.organizationId,
+      createdBy: currentUser.id,
+      batchId: s.batchId ?? randomUUID(),
+    }));
+    if (!s.batchId) { s.batchId = saved.batchId; await this.scheduleRepo.save(s); }
+    return { id: saved.id, queued: failed.length };
+  }
+
+  /** What a group send stores: the rules, resolved to people when it goes out. Needs an organization. */
+  private segmentFor(dto: BulkSegmentDto | undefined, organizationId: number | null): ScheduleSegment | null {
+    if (!dto) return null;
+    if (organizationId == null) throw new BadRequestException('Sending to a group needs an organization');
+    const fallbacks = Object.fromEntries(Object.entries(dto.fallbacks ?? {}).filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, v.trim()]));
+    return {
+      rules: dto.rules.map(({ field, op, values, days }) => ({ field, op, values, days })),
+      excludeIds: dto.excludeIds ?? [],
+      tzOffsetMinutes: dto.tzOffsetMinutes,
+      fallbacks,
+      label: dto.label?.trim() || null,
+    };
+  }
+
+  /**
+   * Add everyone the group matches right now to the schedule's recipients, each with their own values.
+   * Explicit recipients already on the schedule keep theirs. Returns how many contacts matched.
+   */
+  private async resolveSegment(schedule: EmailSchedule): Promise<number> {
+    const seg = schedule.segment!;
+    const orgId = schedule.organizationId!;
+    const [org, creator] = await Promise.all([
+      this.organizationRepo.findOne({ where: { id: orgId } }),
+      this.userRepo.findOne({ where: { id: schedule.createdBy }, select: ['id', 'name', 'email'] }),
+    ]);
+    const clients = await this.segments.resolve(orgId, seg.rules, localDay(seg.tzOffsetMinutes), seg.excludeIds);
+    const custom = await this.customVariables.valuesForClients(orgId, clients.map((c) => c.id));
+    const sender = { orgName: org?.name ?? '', userName: creator?.name ?? creator?.email ?? '', appUrl: firstFrontendUrl(process.env.FRONTEND_URL) };
+    const emails = [...schedule.recipientEmails];
+    const vars = { ...(schedule.recipientVariables ?? {}) };
+    const seen = new Set(emails);
+    for (const c of clients) {
+      const email = c.email!.trim().toLowerCase();
+      if (seen.has(email)) continue;
+      seen.add(email);
+      emails.push(email);
+      // typed values < custom fields < the contact's own fields (later non-empty wins), as in the browser
+      vars[email] = mergeVariables(seg.fallbacks, custom.get(c.id), clientVariables(c, org?.industry, sender));
+    }
+    schedule.recipientEmails = emails;
+    schedule.recipientVariables = vars;
+    schedule.segment = { ...seg, resolvedAt: new Date().toISOString(), matched: clients.length };
+    return clients.length;
+  }
 
   private emitMailStatus(schedule: EmailSchedule) {
     this.eventsGateway.emitToOrg(schedule.organizationId, 'mail.status', {
@@ -294,17 +432,127 @@ export class MailManagementService {
     return d;
   }
 
-  async createSchedule(dto: ScheduleEmailDto, currentUser: User): Promise<any> {
-    let templateRef: EmailTemplate | null = null;
-    if (dto.templateId != null) {
-      templateRef = await this.templateRepo.findOne({ where: { id: dto.templateId } });
-      if (!templateRef) throw new NotFoundException('Template not found');
-      if (!this.canUseTemplateForSending(currentUser, templateRef)) {
-        throw new ForbiddenException('You can only send using your allowed templates (master: global only; org: global or org templates)');
-      }
-    } else {
+  /** Template sends: the template must exist and be usable by this user. Custom sends: subject + body required. */
+  private async checkMessage(
+    dto: { templateId?: number; subject?: string; body?: string },
+    currentUser: User,
+  ): Promise<EmailTemplate | null> {
+    if (dto.templateId == null) {
       if (!dto.subject?.trim()) throw new BadRequestException('subject is required for custom scheduled emails');
       if (!dto.body?.trim()) throw new BadRequestException('body is required for custom scheduled emails');
+      return null;
+    }
+    const templateRef = await this.templateRepo.findOne({ where: { id: dto.templateId } });
+    if (!templateRef) throw new NotFoundException('Template not found');
+    if (!this.canUseTemplateForSending(currentUser, templateRef)) {
+      throw new ForbiddenException('You can only send using your allowed templates (master: global only; org: global or org templates)');
+    }
+    return templateRef;
+  }
+
+  /**
+   * Queue one message to many recipients for immediate sending. The cron processor sends it
+   * server-side, so the user can close the tab; it shows up in Scheduled Mails like any schedule.
+   */
+  async queueBulkSend(dto: SendBulkDto, currentUser: User): Promise<{ id: number; queued: number }> {
+    checkCopyAddresses(dto.cc, dto.bcc);
+    const templateRef = await this.checkMessage(dto, currentUser);
+
+    const { recipientVariables, recipientAttachments, recipientEmails } = collectRecipients(dto.recipients ?? []);
+    const isMaster = currentUser.role?.name === RoleName.MASTER_ADMIN;
+    checkAttachmentRefs(dto.attachments ?? [], recipientAttachments, currentUser.organizationId, isMaster);
+    const organizationId = isMaster ? (templateRef?.organizationId ?? null) : currentUser.organizationId;
+    const segment = this.segmentFor(dto.segment, organizationId);
+    if (!segment && !recipientEmails.length) throw new BadRequestException('Add at least one recipient');
+
+    const saved = await this.scheduleRepo.save(
+      this.scheduleRepo.create({
+        templateId: dto.templateId ?? null,
+        subject: dto.templateId == null ? dto.subject!.trim() : null,
+        body: dto.templateId == null ? dto.body!.trim() : null,
+        recipientEmails,
+        recipientVariables,
+        attachments: dto.attachments?.length ? dto.attachments : null,
+        recipientAttachments: Object.keys(recipientAttachments).length ? recipientAttachments : null,
+        variables: null,
+        cc: dto.cc?.trim() || null,
+        bcc: dto.bcc?.trim() || null,
+        segment,
+        batchId: randomUUID(),
+        progress: 0,
+        scheduledAt: new Date(),
+        status: 'pending',
+        organizationId,
+        createdBy: currentUser.id,
+      }),
+    );
+    // a group's size is only final when it goes out
+    return { id: saved.id, queued: recipientEmails.length, ...(segment ? { segment: true } : {}) };
+  }
+
+  async createSchedule(dto: ScheduleEmailDto, currentUser: User): Promise<any> {
+    checkCopyAddresses(dto.cc, dto.bcc);
+    const templateRef = await this.checkMessage(dto, currentUser);
+
+    // One call for many recipients: `recipients` carries each one's own variables
+    let recipientVariables: Record<string, Record<string, string>> | null = null;
+    let recipientAttachments: Record<string, AttachmentRef[]> = {};
+    if (dto.recipients?.length) {
+      const c = collectRecipients(dto.recipients);
+      recipientVariables = c.recipientVariables;
+      recipientAttachments = c.recipientAttachments;
+      dto.recipientEmails = c.recipientEmails;
+    }
+    const hasFiles = !!dto.attachments?.length || Object.keys(recipientAttachments).length > 0;
+    if (hasFiles && dto.schedule.type === 'monthly') {
+      throw new BadRequestException('Attachments are not supported for monthly repeating emails yet. Use a one-off schedule or send now.');
+    }
+    checkAttachmentRefs(dto.attachments ?? [], recipientAttachments, currentUser.organizationId, currentUser.role?.name === RoleName.MASTER_ADMIN);
+    if (dto.segment && dto.schedule.type === 'monthly') {
+      throw new BadRequestException('Monthly repeating emails need a fixed list of recipients, not a group.');
+    }
+    if (!dto.recipientEmails?.length && !dto.segment) throw new BadRequestException('recipientEmails or recipients is required');
+
+    if (dto.schedule.type === 'repeat') {
+      const rule = dto.schedule.repeat;
+      if (!rule) throw new BadRequestException('Say how often it repeats');
+      const weekdays = rule.every === 'week' || rule.every === 'day' ? (rule.weekdays ?? []) : [];
+      const days = rule.days ?? [];
+      if ((rule.every === 'week' || rule.every === 'day') && !weekdays.length) throw new BadRequestException('Pick at least one day of the week');
+      if (rule.every !== 'week' && rule.every !== 'day' && !days.length) throw new BadRequestException('Pick at least one day of the month');
+      if (rule.endDate && rule.endDate < rule.startDate) throw new BadRequestException('The end date is before the start date');
+      const validTimes = dto.schedule.times.filter((t) => t?.trim()).map((t) => t.trim());
+      if (!validTimes.length) throw new BadRequestException('Add at least one send time');
+      const organizationId = currentUser.role?.name === RoleName.MASTER_ADMIN
+        ? (templateRef?.organizationId ?? null)
+        : currentUser.organizationId;
+      const saved = await this.recurringRepo.save(this.recurringRepo.create({
+        templateId: dto.templateId ?? null,
+        subject: dto.templateId == null ? dto.subject!.trim() : null,
+        body: dto.templateId == null ? dto.body!.trim() : null,
+        recipientEmails: [...new Set(dto.recipientEmails ?? [])],
+        variables: dto.variables ?? null,
+        recipientVariables,
+        cc: dto.cc?.trim() || null,
+        bcc: dto.bcc?.trim() || null,
+        attachments: dto.attachments?.length ? dto.attachments : null,
+        recipientAttachments: Object.keys(recipientAttachments).length ? recipientAttachments : null,
+        segment: this.segmentFor(dto.segment, organizationId),
+        frequency: rule.every,
+        months: [...new Set(rule.months)].sort((a, b) => a - b),
+        days: weekdays.length ? [] : [...new Set(days)],
+        weekdays: weekdays.length ? [...new Set(weekdays)].sort() : null,
+        startDate: rule.startDate,
+        endDate: rule.endDate ?? null,
+        maxSends: rule.count ?? null,
+        times: validTimes,
+        timeZoneOffset: dto.schedule.timeZoneOffset ?? null,
+        batchId: randomUUID(),
+        status: 'active' as const,
+        organizationId,
+        createdBy: currentUser.id,
+      }));
+      return { created: 1, type: 'recurring', id: saved.id };
     }
 
     // Monthly type creates an indefinitely recurring schedule
@@ -320,21 +568,30 @@ export class MailManagementService {
         ? (templateRef?.organizationId ?? null)
         : currentUser.organizationId;
 
-      const recurring = this.recurringRepo.create({
+      const base = {
         templateId: dto.templateId ?? null,
         subject: dto.templateId == null ? dto.subject!.trim() : null,
         body: dto.templateId == null ? dto.body!.trim() : null,
-        recipientEmails: [...new Set(dto.recipientEmails)],
-        variables: dto.variables ?? null,
         months,
         days,
         times: validTimes,
         timeZoneOffset: dto.schedule.timeZoneOffset ?? null,
-        status: 'active',
+        batchId: randomUUID(),
+        status: 'active' as const,
         organizationId,
         createdBy: currentUser.id,
-      });
-      const saved = await this.recurringRepo.save(recurring);
+      };
+      // Recurring rows hold one shared `variables`; with per-recipient values, store one row per recipient
+      // (saved together in one call). ponytail: N rows for N recipients; add a recipientVariables column if that grows.
+      if (recipientVariables) {
+        const rows = Object.entries(recipientVariables).map(([email, vars]) =>
+          this.recurringRepo.create({ ...base, recipientEmails: [email], variables: { ...(dto.variables ?? {}), ...vars } }));
+        const saved = await this.recurringRepo.save(rows);
+        return { created: saved.length, type: 'recurring', id: saved[0].id, ids: saved.map((r) => r.id) };
+      }
+      const saved = await this.recurringRepo.save(
+        this.recurringRepo.create({ ...base, recipientEmails: [...new Set(dto.recipientEmails)], variables: dto.variables ?? null }),
+      );
       return { created: 1, type: 'recurring', id: saved.id };
     }
 
@@ -345,9 +602,11 @@ export class MailManagementService {
       ? (templateRef?.organizationId ?? null)
       : currentUser.organizationId;
     const createdBy = currentUser.id;
-    const recipientEmails = [...new Set(dto.recipientEmails)];
+    const recipientEmails = [...new Set(dto.recipientEmails ?? [])];
+    const segment = this.segmentFor(dto.segment, organizationId);
 
     const timeZoneOffset = dto.schedule.timeZoneOffset;
+    const batchId = randomUUID();
     const schedules: EmailSchedule[] = [];
     for (const slot of slots) {
       const scheduledAt = this.slotToScheduledAt(slot.date, slot.time, timeZoneOffset);
@@ -357,10 +616,17 @@ export class MailManagementService {
         body: dto.templateId == null ? dto.body!.trim() : null,
         recipientEmails,
         variables: dto.variables ?? null,
+        recipientVariables,
+        attachments: dto.attachments?.length ? dto.attachments : null,
+        recipientAttachments: Object.keys(recipientAttachments).length ? recipientAttachments : null,
+        segment,
+        cc: dto.cc?.trim() || null,
+        bcc: dto.bcc?.trim() || null,
         scheduledAt,
         status: 'pending',
         organizationId,
         createdBy,
+        batchId,
       });
       schedules.push(await this.scheduleRepo.save(schedule));
     }
@@ -410,9 +676,17 @@ export class MailManagementService {
     return this.scheduleRepo.save(schedule);
   }
 
-  async cancelSchedule(id: number, currentUser: User): Promise<EmailSchedule> {
+  /** Cancels a pending or in-progress email; one that already failed or was cancelled is removed from the list. */
+  async cancelSchedule(id: number, currentUser: User): Promise<EmailSchedule | { deleted: true }> {
     const schedule = await this.getSchedule(id, currentUser);
-    if (schedule.status !== 'pending') throw new BadRequestException('Only pending schedules can be cancelled');
+    if (schedule.status === 'failed' || schedule.status === 'cancelled') {
+      await this.scheduleRepo.remove(schedule);
+      return { deleted: true };
+    }
+    // A bulk send in progress can be stopped too; the processor notices within 10 recipients
+    if (schedule.status !== 'pending' && schedule.status !== 'sending') {
+      throw new BadRequestException('Only pending or in-progress schedules can be cancelled');
+    }
     schedule.status = 'cancelled';
     return this.scheduleRepo.save(schedule);
   }
@@ -497,8 +771,13 @@ export class MailManagementService {
     const activeRecurring = await this.recurringRepo.find({ where: { status: 'active' } });
     for (const recurring of activeRecurring) {
       const local = this.getLocalDate(now, recurring.timeZoneOffset ?? undefined);
-      if (!recurring.months.includes(local.month)) continue;
-      if (!recurring.days.includes(local.day)) continue;
+      const today = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+      if (recurring.endDate && today > recurring.endDate) {
+        recurring.status = 'ended';
+        await this.recurringRepo.save(recurring);
+        continue;
+      }
+      if (!firesOn(recurring, local.year, local.month, local.day)) continue;
 
       for (const timeStr of recurring.times) {
         const dateStr = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
@@ -524,15 +803,48 @@ export class MailManagementService {
           body: recurring.body,
           recipientEmails: recurring.recipientEmails,
           variables: recurring.variables,
+          recipientVariables: recurring.recipientVariables ?? null,
+          cc: recurring.cc ?? null,
+          bcc: recurring.bcc ?? null,
+          attachments: recurring.attachments ?? null,
+          recipientAttachments: recurring.recipientAttachments ?? null,
+          // worked out again for this send
+          segment: recurring.segment ? { ...recurring.segment, resolvedAt: undefined, matched: undefined } : null,
           scheduledAt,
           status: 'pending',
           organizationId: recurring.organizationId,
           createdBy: recurring.createdBy,
           recurringScheduleId: recurring.id,
+          batchId: recurring.batchId,
         });
         await this.scheduleRepo.save(record);
+        recurring.sentCount = (recurring.sentCount ?? 0) + 1;
+        if (recurring.maxSends && recurring.sentCount >= recurring.maxSends) recurring.status = 'ended';
+        await this.recurringRepo.save(recurring);
+        if (recurring.status === 'ended') break;
       }
     }
+  }
+
+  /** {{login_email}}/{{login_password}} for a recipient who is a client of this org with a portal login. */
+  async loginVariables(organizationId: number | null, email: string): Promise<Record<string, string>> {
+    if (organizationId == null) return {};
+    const client = await this.clientRepo
+      .createQueryBuilder('c')
+      .where('c.organizationId = :organizationId', { organizationId })
+      .andWhere('LOWER(c.email) = LOWER(:email)', { email })
+      .andWhere('c.userId IS NOT NULL')
+      .getOne();
+    if (!client?.userId) return {};
+    const user = await this.userRepo.findOne({ where: { id: client.userId }, select: ['id', 'email', 'encryptedPlainPassword'] });
+    if (!user) return {};
+    const password = decryptPlainPassword(user.encryptedPlainPassword ?? undefined);
+    return { login_email: user.email, ...(password ? { login_password: password } : {}) };
+  }
+
+  /** Pause between emails (SMTP rate limits). A method so tests can stub it. */
+  pause(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /** Process pending schedules due now: send to each recipient with 2 sec delay. Called by cron. */
@@ -543,7 +855,7 @@ export class MailManagementService {
     await this.insertRecurringDueSlots(now);
 
     const pending = await this.scheduleRepo.find({
-      where: { status: 'pending', scheduledAt: LessThanOrEqual(now) },
+      where: { status: In(['pending', 'sending']), scheduledAt: LessThanOrEqual(now) },
       relations: ['template'],
       order: { scheduledAt: 'ASC' },
     });
@@ -574,9 +886,11 @@ export class MailManagementService {
 
       const variables = { ...(schedule.variables ?? {}) };
       let fromName: string | undefined;
+      let identity: { replyTo: string | null; signature: string | null } | undefined;
       if (schedule.organizationId != null) {
         const org = await this.organizationRepo.findOne({ where: { id: schedule.organizationId } });
         variables.org_name = org?.name ?? '';
+        identity = { replyTo: org?.mailReplyTo ?? null, signature: org?.mailSignature ?? null };
         const orgAdmin = await this.userRepo
           .createQueryBuilder('u')
           .innerJoin('u.role', 'r')
@@ -601,41 +915,119 @@ export class MailManagementService {
         }
       }
 
-      let anySent = false;
+      // A group send: work out who's in it now (once; a resumed send keeps the list it started with)
+      if (schedule.segment && !schedule.segment.resolvedAt && schedule.organizationId != null) {
+        await this.resolveSegment(schedule);
+        // A repeat to a group (e.g. "follow-up date is in 3 days", checked daily) often matches nobody: that's not a failure
+        if (!schedule.recipientEmails.length && schedule.recurringScheduleId != null) {
+          await this.scheduleRepo.remove(schedule);
+          continue;
+        }
+        if (!schedule.recipientEmails.length) {
+          schedule.status = 'failed';
+          schedule.errorMessage = 'No contacts with an email address matched this group when it was sent';
+          await this.scheduleRepo.save(schedule);
+          this.emitMailStatus(schedule);
+          failed++;
+          continue;
+        }
+        await this.scheduleRepo.save(schedule);
+      }
+
+      let anySent = schedule.progress > 0; // a resumed send already delivered some
       let lastError: string | null = null;
-      for (let i = 0; i < schedule.recipientEmails.length; i++) {
-        if (i > 0) await delay(DELAY_BETWEEN_EMAILS_MS);
+      let stopped = false;
+      schedule.status = 'sending';
+      await this.scheduleRepo.save(schedule);
+      this.emitMailStatus(schedule);
+      const cc = schedule.cc ?? undefined;
+      const bcc = schedule.bcc ?? undefined;
+      const content = isCustom ? `${schedule.subject} ${schedule.body}` : `${schedule.template!.subject} ${schedule.template!.body}`;
+      const used = usedVariables(content);
+      const needsLogin = used.some((v) => v === 'login_email' || v === 'login_password');
+      const needsCustom = used.some((v) => !RESERVED_KEYS.has(v));
+      // Files every recipient gets are downloaded once per send; a recipient's own files per email
+      const fileCache = new Map<string, Buffer>();
+      const loadFiles = async (refs: AttachmentRef[], cache: boolean) => Promise.all(refs.map(async (a) => {
+        let content = fileCache.get(a.key);
+        if (!content) {
+          content = await this.s3.download(a.key);
+          if (cache) fileCache.set(a.key, content);
+        }
+        return { filename: a.name, content, contentType: a.contentType };
+      }));
+      // Unsubscribed and bounced addresses never get bulk mail (checked when sending, not when queued)
+      const blocked = schedule.organizationId != null
+        ? await this.compliance.suppressedAmong(schedule.organizationId, schedule.recipientEmails.slice(schedule.progress ?? 0))
+        : new Map<string, string>();
+      let skipped = 0;
+      for (let i = schedule.progress ?? 0; i < schedule.recipientEmails.length; i++) {
         const to = schedule.recipientEmails[i];
+        const block = blocked.get(to.trim().toLowerCase());
+        if (block) { skipped++; schedule.progress = i + 1; await this.record(schedule.id, to, 'skipped', block); continue; }
+        if (i > (schedule.progress ?? 0)) await this.pause(DELAY_BETWEEN_EMAILS_MS);
+        const login = needsLogin ? await this.loginVariables(schedule.organizationId, to) : {};
+        const custom = needsCustom ? await this.customVariables.valuesFor(schedule.organizationId, to) : {};
+        // later non-empty wins: portal login / custom-variable lookups < the recipient's own values < org values
+        const vars = mergeVariables(login, custom, schedule.recipientVariables?.[to] ?? {}, variables);
         try {
+          const files = [
+            ...(await loadFiles(schedule.attachments ?? [], true)),
+            ...(await loadFiles(schedule.recipientAttachments?.[to] ?? [], false)),
+          ];
           let ok: boolean;
           if (isCustom) {
             ok = await this.emailTemplatesService.sendCustomInternal(
               to,
               schedule.subject!,
               schedule.body!,
-              variables,
+              vars,
               fromName,
               schedule.organizationId ?? undefined,
+              cc,
+              bcc,
+              files,
+              identity,
             );
           } else {
             ok = await this.emailTemplatesService.sendWithTemplateInternal(
               to,
               schedule.template!,
-              variables,
+              vars,
               fromName,
               schedule.organizationId ?? undefined,
+              cc,
+              bcc,
+              files,
+              identity,
             );
           }
-          if (ok) { sent++; anySent = true; }
-          else lastError = 'Send returned false';
+          if (ok) { sent++; anySent = true; await this.record(schedule.id, to, 'sent'); }
+          else { lastError = 'The mail server did not accept it'; failed++; await this.record(schedule.id, to, 'failed', lastError); }
         } catch (e) {
           lastError = e instanceof Error ? e.message : String(e);
           failed++;
+          await this.record(schedule.id, to, 'failed', lastError);
         }
+        schedule.progress = i + 1;
+        // Every 10 recipients: stop if the user cancelled, else save progress so a restart resumes here
+        if (schedule.progress % 10 === 0 && schedule.progress < schedule.recipientEmails.length) {
+          const current = await this.scheduleRepo.findOne({ where: { id: schedule.id }, select: ['id', 'status'] });
+          if (current?.status === 'cancelled') { stopped = true; break; }
+          await this.scheduleRepo.save(schedule);
+        }
+      }
+      if (stopped) {
+        schedule.status = 'cancelled';
+        schedule.errorMessage = `Stopped by user after ${schedule.progress} of ${schedule.recipientEmails.length}`;
+        await this.scheduleRepo.save(schedule);
+        this.emitMailStatus(schedule);
+        continue;
       }
       schedule.status = anySent ? 'sent' : 'failed';
       schedule.sentAt = new Date();
-      schedule.errorMessage = lastError;
+      const skippedNote = skipped ? `Skipped ${skipped} unsubscribed or bounced address${skipped === 1 ? '' : 'es'}` : null;
+      schedule.errorMessage = [lastError, skippedNote].filter(Boolean).join('. ') || null;
       await this.scheduleRepo.save(schedule);
       this.emitMailStatus(schedule);
     }

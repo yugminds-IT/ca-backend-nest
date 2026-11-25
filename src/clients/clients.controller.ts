@@ -5,6 +5,7 @@ import { CreateClientWithLoginDto } from './dto/create-client-with-login.dto';
 import { OnboardClientDto } from './dto/onboard-client.dto';
 import { CreateDirectorDto, UpdateDirectorDto } from './dto/onboard-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { BulkTagDto } from './dto/bulk-tag.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -36,6 +37,13 @@ export class ClientsController {
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
   onboard(@Body() dto: OnboardClientDto, @CurrentUser() user: User) {
     return this.clients.onboard(dto, user);
+  }
+
+  @Post('tags')
+  @UseGuards(RolesGuard)
+  @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  bulkTag(@Body() dto: BulkTagDto, @CurrentUser() user: User) {
+    return this.clients.bulkTag(dto, user);
   }
 
   @Get()

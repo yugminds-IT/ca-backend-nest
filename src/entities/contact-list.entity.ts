@@ -25,10 +25,10 @@ export class ContactList {
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE' })

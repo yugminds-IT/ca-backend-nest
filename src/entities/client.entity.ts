@@ -77,10 +77,14 @@ export class Client {
   @Column({ type: 'text', nullable: true, name: 'additionalNotes' })
   additionalNotes: string | null;
 
-  @CreateDateColumn()
+  /** Labels any industry can use to group contacts ("VIP", "Class 10", "Cardiology") */
+  @Column('text', { array: true, default: () => "'{}'" })
+  tags: string[];
+
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, (org) => org.clients, { onDelete: 'CASCADE' })

@@ -44,10 +44,10 @@ export class Contact {
   @Column({ type: 'varchar', length: 20, default: 'subscribed' })
   status: ContactStatus;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
   @ManyToOne(() => Organization, { onDelete: 'CASCADE' })

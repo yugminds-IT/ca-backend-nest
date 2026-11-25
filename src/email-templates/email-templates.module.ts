@@ -6,9 +6,10 @@ import { Organization } from '../entities/organization.entity';
 import { EmailTemplatesService } from './email-templates.service';
 import { EmailTemplatesController } from './email-templates.controller';
 import { EmailModule } from '../email/email.module';
+import { CustomVariablesModule } from '../custom-variables/custom-variables.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([EmailTemplate, EmailSchedule, Organization]), EmailModule],
+  imports: [TypeOrmModule.forFeature([EmailTemplate, EmailSchedule, Organization]), EmailModule, CustomVariablesModule],
   controllers: [EmailTemplatesController],
   providers: [EmailTemplatesService],
   exports: [EmailTemplatesService],

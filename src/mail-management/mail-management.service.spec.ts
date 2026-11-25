@@ -26,6 +26,7 @@ describe('MailManagementService.createSchedule', () => {
     schedules = mockRepo();
     recurring = mockRepo();
     templates = mockRepo();
+    const s3 = { download: jest.fn().mockResolvedValue(Buffer.from("file")) };
     service = new MailManagementService(
       mockRepo() as any,
       mockRepo() as any,
@@ -36,6 +37,11 @@ describe('MailManagementService.createSchedule', () => {
       mockRepo() as any,
       {} as any,
       { emit: jest.fn() } as any,
+      { valuesFor: jest.fn().mockResolvedValue({}) } as any,
+      s3 as any,
+      { suppressedAmong: jest.fn().mockResolvedValue(new Map()) } as any,
+      {} as any,
+      mockRepo() as any,
     );
   });
 

@@ -1,6 +1,6 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { createHmac, randomBytes } from 'crypto';
 import * as dns from 'dns';
 import { SuppressionList, SuppressionReason } from '../entities/suppression-list.entity';
@@ -27,6 +27,20 @@ export class ComplianceService {
       where: { organizationId: orgId, email: cleanEmail },
     });
     return count > 0;
+  }
+
+  /** Which of these addresses are blocked for the org (lower-cased email -> reason). One query per 1,000 addresses. */
+  async suppressedAmong(orgId: number, emails: string[]): Promise<Map<string, SuppressionReason>> {
+    const out = new Map<string, SuppressionReason>()
+    const clean = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))]
+    for (let i = 0; i < clean.length; i += 1000) {
+      const rows = await this.suppressionRepo.find({
+        where: { organizationId: orgId, email: In(clean.slice(i, i + 1000)) },
+        select: ['email', 'reason'],
+      })
+      for (const r of rows) out.set(r.email.toLowerCase(), r.reason)
+    }
+    return out
   }
 
   async addSuppression(

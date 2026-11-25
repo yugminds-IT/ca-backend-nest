@@ -14,9 +14,9 @@ export class Otp {
   @Column({ type: 'varchar', length: 50, default: 'password_reset' })
   type: string;
 
-  @Column({ type: 'timestamp', name: 'expiresAt' })
+  @Column({ type: 'timestamptz', name: 'expiresAt' })
   expiresAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }
