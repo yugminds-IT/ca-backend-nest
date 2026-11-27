@@ -36,6 +36,10 @@ export class EmailTemplate {
   @Column('int', { name: 'organizationId', nullable: true })
   organizationId: number | null;
 
+  /** Unit-specific template. Null for org-wide and global templates. */
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

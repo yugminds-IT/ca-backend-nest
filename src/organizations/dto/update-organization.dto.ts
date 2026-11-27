@@ -1,4 +1,5 @@
-import { IsOptional, IsString, MaxLength, Matches, IsEmail, ValidateIf } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, Matches, IsEmail, ValidateIf } from 'class-validator';
+import { UNIT_STRUCTURES, UnitStructure } from '../unit-structure';
 
 export class UpdateOrganizationDto {
   @IsOptional()
@@ -38,4 +39,9 @@ export class UpdateOrganizationDto {
   @IsEmail()
   @MaxLength(255)
   notificationEmail?: string;
+
+  /** Unit and brand layout. Chosen at signup; only a master admin may change it. */
+  @IsOptional()
+  @IsIn([...UNIT_STRUCTURES])
+  unitStructure?: UnitStructure;
 }

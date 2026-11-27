@@ -70,6 +70,22 @@ export class Organization {
   @Column({ type: 'jsonb', nullable: true })
   industrySettings: Record<string, any> | null;
 
+  /**
+   * Chosen at signup. true: an admin panel for several brands (business units), with staff assigned to
+   * the brands they may see. false: one branch, and every employee sees its data directly.
+   * Only a master admin changes it afterwards. Existing organizations keep the multi-brand behaviour.
+   */
+  @Column({ type: 'boolean', default: true })
+  adminPanelEnabled: boolean;
+
+  /**
+   * The layout chosen at signup: multi_unit, one_unit_multi_brand, one_unit_one_brand or
+   * one_unit_no_brand (see organizations/unit-structure.ts). adminPanelEnabled is derived from it
+   * and kept in sync whenever it changes.
+   */
+  @Column({ type: 'varchar', length: 30, default: 'multi_unit' })
+  unitStructure: string;
+
   /** Whitelisted CORS domains for public contact form submissions */
   @Column({ type: 'jsonb', nullable: true, default: () => "'[]'" })
   allowedOrigins: string[];

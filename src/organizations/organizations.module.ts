@@ -4,9 +4,10 @@ import { OrganizationsService } from './organizations.service';
 import { OrganizationsController } from './organizations.controller';
 import { Organization } from '../entities/organization.entity';
 import { EmailModule } from '../email/email.module';
+import { BusinessUnitsModule } from '../business-units/business-units.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Organization]), EmailModule],
+  imports: [TypeOrmModule.forFeature([Organization]), EmailModule, BusinessUnitsModule],
   controllers: [OrganizationsController],
   providers: [OrganizationsService],
   exports: [OrganizationsService],

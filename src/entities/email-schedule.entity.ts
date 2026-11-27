@@ -46,6 +46,9 @@ export class EmailSchedule {
   @Column('int', { name: 'organizationId', nullable: true })
   organizationId: number | null;
 
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Column('int', { name: 'createdBy' })
   createdBy: number;
 

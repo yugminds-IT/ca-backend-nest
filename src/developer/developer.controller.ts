@@ -26,10 +26,15 @@ import {
 } from './dto/developer.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard } from '../access/permissions.guard';
+import { Require } from '../access/require.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
 import { ApiRateLimitGuard } from '../common/guards/api-rate-limit.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../entities/user.entity';
-import { INDUSTRY_PRESETS } from '../common/industry-presets';
+import { RoleName } from '../common/enums/role.enum';
+import { IndustryTemplatesService } from '../industry-templates/industry-templates.service';
 
 // Transparent 1x1 GIF buffer for open-tracking
 const TRANSPARENT_GIF_BUFFER = Buffer.from(
@@ -37,22 +42,39 @@ const TRANSPARENT_GIF_BUFFER = Buffer.from(
   'base64',
 );
 
+/** Secrets and outbound webhooks: administrators only. */
+/** Lead inbox and delivery logs: staff who work the leads. Client portal users are excluded. */
+const STAFF = [
+  RoleName.MASTER_ADMIN,
+  RoleName.ORG_ADMIN,
+  RoleName.CAA,
+  RoleName.ORG_EMPLOYEE,
+];
+
 @Controller()
 export class DeveloperController {
-  constructor(private readonly developerService: DeveloperService) {}
+  constructor(
+    private readonly developerService: DeveloperService,
+    private readonly industries: IndustryTemplatesService,
+  ) {}
 
   // ------------------------------------------------------------- Public Industry Presets Catalog
   @Public()
   @Get('developer/industries')
   getIndustries() {
-    return Object.values(INDUSTRY_PRESETS);
+    return this.industries.list();
   }
 
   // ------------------------------------------------------------- EmailJS Model: Public Form Submission
   @Public()
   @UseGuards(ApiRateLimitGuard)
   @UsePipes(new ValidationPipe({ whitelist: false, transform: true }))
-  @Post(['api/v1/send-form', 'api/v1/forms', 'api/v1/submissions', 'developer/send-form'])
+  @Post([
+    'api/v1/send-form',
+    'api/v1/forms',
+    'api/v1/submissions',
+    'developer/send-form',
+  ])
   async sendForm(
     @Body() body: SendFormSubmissionDto,
     @Headers('x-public-key') headerPublicKey: string | undefined,
@@ -62,9 +84,13 @@ export class DeveloperController {
     @Headers('referer') referer: string | undefined,
     @Req() req: Request,
   ) {
-    const rawBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
+    const rawBody = (
+      req.body && typeof req.body === 'object' ? req.body : {}
+    ) as Record<string, any>;
     const payload = { ...rawBody, ...body };
-    const authBearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+    const authBearer = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : undefined;
     const detectedKey =
       payload.publicKey ||
       payload.apiKey ||
@@ -76,8 +102,14 @@ export class DeveloperController {
     if (!payload.publicKey && detectedKey) {
       payload.publicKey = detectedKey;
     }
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
-    return this.developerService.handleFormSubmission(payload, { origin, referer, ip });
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+      req.ip;
+    return this.developerService.handleFormSubmission(payload, {
+      origin,
+      referer,
+      ip,
+    });
   }
 
   // ------------------------------------------------------------- Resend Model: Transactional Email API
@@ -91,7 +123,9 @@ export class DeveloperController {
   ) {
     const rawKey =
       apiKeyHeader ||
-      (authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined);
+      (authHeader?.startsWith('Bearer ')
+        ? authHeader.slice(7).trim()
+        : undefined);
 
     if (!rawKey) {
       throw new UnauthorizedException(
@@ -99,8 +133,9 @@ export class DeveloperController {
       );
     }
 
-    const { org, apiKey } = await this.developerService.authenticateSecretKey(rawKey);
-    return this.developerService.sendTransactional(org.id, apiKey.id, body);
+    const { org, apiKey } =
+      await this.developerService.authenticateSecretKey(rawKey);
+    return this.developerService.sendTransactional(org.id, apiKey.id, body, apiKey.businessUnitId ?? null);
   }
 
   // ------------------------------------------------------------- Open & Click Telemetry
@@ -122,91 +157,163 @@ export class DeveloperController {
     @Query('url') targetUrl: string,
     @Res() res: Response,
   ) {
-    const safeUrl = await this.developerService.recordClick(messageId, targetUrl);
+    const safeUrl = await this.developerService.recordClick(
+      messageId,
+      targetUrl,
+    );
     return res.redirect(302, safeUrl);
   }
 
   // ------------------------------------------------------------- Dashboard: API Keys Management
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Get('developer/api-keys')
   listApiKeys(@CurrentUser() user: User) {
     return this.developerService.listApiKeys(user.organizationId!);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Post('developer/api-keys')
   createApiKey(@CurrentUser() user: User, @Body() dto: CreateApiKeyDto) {
     return this.developerService.createApiKey(user.organizationId!, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Patch('developer/api-keys/:id')
   updateApiKey(
     @CurrentUser() user: User,
     @Param('id') id: string,
     @Body() dto: UpdateApiKeyDto,
   ) {
-    return this.developerService.updateApiKey(user.organizationId!, Number(id), dto);
+    return this.developerService.updateApiKey(
+      user.organizationId!,
+      Number(id),
+      dto,
+    );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Delete('developer/api-keys/:id')
   revokeApiKey(@CurrentUser() user: User, @Param('id') id: string) {
     return this.developerService.revokeApiKey(user.organizationId!, Number(id));
   }
 
   // ------------------------------------------------------------- Dashboard: Contact Form Inbox
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('inbox.manage')
   @Get('developer/inbox')
-  listSubmissions(@CurrentUser() user: User, @Query('status') status?: string) {
-    return this.developerService.listSubmissions(user.organizationId!, status);
+  listSubmissions(
+    @CurrentUser() user: User,
+    @Query('status') status?: string,
+    @Query('businessUnitId') businessUnitId?: string,
+  ) {
+    const parsedUnitId =
+      businessUnitId !== undefined && businessUnitId !== '' && !Number.isNaN(Number(businessUnitId))
+        ? Number(businessUnitId)
+        : undefined;
+    return this.developerService.listSubmissions(
+      user.organizationId!,
+      status,
+      user,
+      parsedUnitId,
+    );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('inbox.manage')
   @Patch('developer/inbox/:id/status')
   updateSubmissionStatus(
     @CurrentUser() user: User,
     @Param('id') id: string,
     @Body('status') status: string,
   ) {
-    return this.developerService.updateSubmissionStatus(user.organizationId!, Number(id), status);
+    return this.developerService.updateSubmissionStatus(
+      user.organizationId!,
+      Number(id),
+      status,
+      user,
+    );
   }
 
-  @UseGuards(JwtAuthGuard)
+  /** Form response -> lead in the response's business unit. Same email or phone as a lead there: merged, not duplicated. */
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('inbox.manage', 'leads.create')
+  @Post('developer/inbox/:id/convert-to-lead')
+  convertToLead(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.developerService.convertSubmissionToLead(
+      user.organizationId!,
+      Number(id),
+      user,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('inbox.manage', 'leads.create')
   @Post('developer/inbox/:id/convert-to-client')
   convertToClient(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.developerService.convertToClient(user.organizationId!, Number(id));
+    return this.developerService.convertToClient(
+      user.organizationId!,
+      Number(id),
+      user,
+    );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('inbox.manage')
   @Delete('developer/inbox/:id')
   deleteSubmission(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.developerService.deleteSubmission(user.organizationId!, Number(id));
+    return this.developerService.deleteSubmission(
+      user.organizationId!,
+      Number(id),
+      user,
+    );
   }
 
   // ------------------------------------------------------------- Dashboard: Delivery Logs
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...STAFF)
   @Get('developer/logs')
   listLogs(@CurrentUser() user: User, @Query('status') status?: string) {
     return this.developerService.listLogs(user.organizationId!, status);
   }
 
   // ------------------------------------------------------------- Dashboard: Webhooks
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Get('developer/webhooks')
   listWebhooks(@CurrentUser() user: User) {
     return this.developerService.listWebhooks(user.organizationId!);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Post('developer/webhooks')
   createWebhook(@CurrentUser() user: User, @Body() dto: CreateWebhookDto) {
     return this.developerService.createWebhook(user.organizationId!, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+  @Roles(...STAFF)
+  @Require('developer.manage')
   @Delete('developer/webhooks/:id')
   deleteWebhook(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.developerService.deleteWebhook(user.organizationId!, Number(id));
+    return this.developerService.deleteWebhook(
+      user.organizationId!,
+      Number(id),
+    );
   }
 }

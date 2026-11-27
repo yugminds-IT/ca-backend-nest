@@ -15,7 +15,11 @@ import { SmtpConfigDto, TestSmtpDto } from './dto/smtp-config.dto';
 import { User } from '../entities/user.entity';
 import { RoleName } from '../common/enums/role.enum';
 import { EmailService } from '../email/email.service';
-import { deriveKey, encrypt, decrypt } from '../common/utils/crypto.util';
+import { BusinessUnitsService } from '../business-units/business-units.service';
+import { OrgUnitsService } from '../business-units/org-units.service';
+import { hasAdminPanel, normalizeStructure, structureChangeProblem } from './unit-structure';
+import { encrypt, decrypt } from '../common/utils/crypto.util';
+import { getSmtpEncryptionKey } from '../common/utils/smtp-key';
 
 @Injectable()
 export class OrganizationsService {
@@ -24,6 +28,8 @@ export class OrganizationsService {
     private repo: Repository<Organization>,
     private emailService: EmailService,
     private config: ConfigService,
+    private businessUnits: BusinessUnitsService,
+    private orgUnits: OrgUnitsService,
   ) {}
 
   private slugify(text: string): string {
@@ -39,15 +45,17 @@ export class OrganizationsService {
   }
 
   private getEncryptionKey(): Buffer {
-    const k =
-      this.config.get<string>('SMTP_ENCRYPTION_KEY') ??
-      'navedhana-smtp-default-key-change-in-prod';
-    return deriveKey(k);
+    return getSmtpEncryptionKey(this.config);
   }
 
-  async create(dto: CreateOrganizationDto, currentUser: User): Promise<Organization> {
+  async create(
+    dto: CreateOrganizationDto,
+    currentUser: User,
+  ): Promise<Organization> {
     if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
-      throw new ForbiddenException('Only master admin can create organizations');
+      throw new ForbiddenException(
+        'Only master admin can create organizations',
+      );
     }
     let slug = dto.slug ?? this.slugify(dto.name);
     let counter = 0;
@@ -57,7 +65,7 @@ export class OrganizationsService {
       slug = `${baseSlug}-${counter}`;
     }
     const tenYearsMs = 10 * 365 * 24 * 60 * 60 * 1000;
-    return this.repo.save(
+    const saved = await this.repo.save(
       this.repo.create({
         ...dto,
         slug,
@@ -66,6 +74,8 @@ export class OrganizationsService {
         accessUntil: new Date(Date.now() + tenYearsMs),
       }),
     );
+    await this.businessUnits.ensureDefault(saved.id);
+    return saved;
   }
 
   async findAll(currentUser: User): Promise<Organization[]> {
@@ -93,7 +103,11 @@ export class OrganizationsService {
     return org;
   }
 
-  async update(id: number, dto: UpdateOrganizationDto, currentUser: User): Promise<Organization> {
+  async update(
+    id: number,
+    dto: UpdateOrganizationDto,
+    currentUser: User,
+  ): Promise<Organization> {
     if (
       currentUser.role?.name !== RoleName.MASTER_ADMIN &&
       currentUser.organizationId !== id
@@ -105,7 +119,23 @@ export class OrganizationsService {
       const existing = await this.repo.findOne({ where: { slug: dto.slug } });
       if (existing) throw new ConflictException('Slug already in use');
     }
-    const { notificationEmail, ...rest } = dto;
+    const { notificationEmail, unitStructure, ...rest } = dto;
+    if (unitStructure !== undefined && unitStructure !== normalizeStructure(org.unitStructure)) {
+      // Fixed at signup. Changing it changes who sees what, so only the platform owner can.
+      if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+        throw new ForbiddenException(
+          'The unit and brand setup was chosen at signup. Contact support to change it.',
+        );
+      }
+      // Narrowing never deletes data, so extra units or brands must be deactivated first.
+      const problem = structureChangeProblem(unitStructure, {
+        activeUnits: await this.orgUnits.countActive(id),
+        activeBrands: await this.businessUnits.countActiveForOrg(id),
+      });
+      if (problem) throw new BadRequestException(problem);
+      org.unitStructure = unitStructure;
+      org.adminPanelEnabled = hasAdminPanel(unitStructure);
+    }
     Object.assign(org, rest);
     if (notificationEmail !== undefined) {
       org.industrySettings = {
@@ -118,7 +148,9 @@ export class OrganizationsService {
 
   async remove(id: number, currentUser: User): Promise<void> {
     if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
-      throw new ForbiddenException('Only master admin can delete organizations');
+      throw new ForbiddenException(
+        'Only master admin can delete organizations',
+      );
     }
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
@@ -144,7 +176,8 @@ export class OrganizationsService {
 
   /** Return SMTP config with password masked */
   async getSmtpConfig(id: number, currentUser: User) {
-    if (!this.canViewSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    if (!this.canViewSmtp(currentUser, id))
+      throw new ForbiddenException('Access denied');
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
     return {
@@ -163,7 +196,8 @@ export class OrganizationsService {
     dto: SmtpConfigDto,
     currentUser: User,
   ): Promise<{ message: string }> {
-    if (!this.canManageSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    if (!this.canManageSmtp(currentUser, id))
+      throw new ForbiddenException('Access denied');
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
 
@@ -180,8 +214,12 @@ export class OrganizationsService {
   }
 
   /** Remove SMTP config — org will fall back to global SMTP */
-  async clearSmtpConfig(id: number, currentUser: User): Promise<{ message: string }> {
-    if (!this.canManageSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+  async clearSmtpConfig(
+    id: number,
+    currentUser: User,
+  ): Promise<{ message: string }> {
+    if (!this.canManageSmtp(currentUser, id))
+      throw new ForbiddenException('Access denied');
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
 
@@ -203,11 +241,14 @@ export class OrganizationsService {
     dto: TestSmtpDto,
     currentUser: User,
   ): Promise<{ success: boolean; message: string }> {
-    if (!this.canManageSmtp(currentUser, id)) throw new ForbiddenException('Access denied');
+    if (!this.canManageSmtp(currentUser, id))
+      throw new ForbiddenException('Access denied');
     const org = await this.repo.findOne({ where: { id } });
     if (!org) throw new NotFoundException('Organization not found');
     if (!org.smtpHost || !org.smtpUser || !org.smtpPass) {
-      throw new BadRequestException('No SMTP config saved for this organization');
+      throw new BadRequestException(
+        'No SMTP config saved for this organization',
+      );
     }
 
     let pass: string;
@@ -245,6 +286,9 @@ export class OrganizationsService {
 
     return sent
       ? { success: true, message: `Test email sent to ${dto.testEmail}` }
-      : { success: false, message: 'SMTP verified but failed to send test email' };
+      : {
+          success: false,
+          message: 'SMTP verified but failed to send test email',
+        };
   }
 }

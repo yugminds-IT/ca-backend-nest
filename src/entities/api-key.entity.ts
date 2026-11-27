@@ -20,6 +20,10 @@ export class ApiKey {
   @Column('int', { name: 'organizationId' })
   organizationId: number;
 
+  /** The business unit whose forms and mail accounts this key belongs to. */
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Column({ type: 'varchar', length: 150 })
   name: string;
 
@@ -46,6 +50,10 @@ export class ApiKey {
 
   @Column({ type: 'int', default: 60 })
   rateLimitPerMinute: number;
+
+  /** When true, each accepted form submission also creates a lead in this key's business unit. */
+  @Column({ type: 'boolean', default: false })
+  autoCreateLead: boolean;
 
   @Column({ type: 'boolean', default: true })
   isActive: boolean;

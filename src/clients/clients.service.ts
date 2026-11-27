@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
+import { resolveTenantScope } from '../common/utils/tenant-scope.util';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { Client } from '../entities/client.entity';
@@ -15,13 +16,11 @@ import { UpdateClientDto } from './dto/update-client.dto';
 import { RoleName } from '../common/enums/role.enum';
 import { Service } from '../entities/service.entity';
 import { ClientDirector } from '../entities/client-director.entity';
-import { encryptPlainPassword, decryptPlainPassword } from '../common/encryption';
 
 /** Client with directors as plain array (no circular ref) for JSON response */
 export type ClientResponse = Omit<Client, 'directors'> & {
   directors: Array<Record<string, unknown>>;
   login_email?: string;
-  login_password?: string;
 };
 
 /** Client response when login credentials were set (one-time generated password) */
@@ -75,18 +74,13 @@ export class ClientsService {
     return { ...client, directors };
   }
 
-  /** Load login_email and login_password (decrypted) for client's user when available. */
-  private async getLoginCredentials(userId: number): Promise<{ login_email?: string; login_password?: string }> {
-    const user = await this.userRepo.findOne({
-      where: { id: userId },
-      select: ['id', 'email', 'encryptedPlainPassword'],
-    });
-    if (!user) return {};
-    const login_password = decryptPlainPassword(user.encryptedPlainPassword ?? undefined);
-    return {
-      login_email: user.email,
-      ...(login_password ? { login_password } : {}),
-    };
+  /**
+   * The client's login email. Passwords are never stored in a readable form or returned: a password
+   * is only shown once, in the response that generated it (generatedPassword).
+   */
+  private async getLoginCredentials(userId: number): Promise<{ login_email?: string }> {
+    const user = await this.userRepo.findOne({ where: { id: userId }, select: ['id', 'email'] });
+    return user ? { login_email: user.email } : {};
   }
 
   async create(dto: CreateClientDto, currentUser: User): Promise<Client> {
@@ -130,11 +124,6 @@ export class ClientsService {
         organizationId,
       }),
     );
-    const encryptedPlain = encryptPlainPassword(generatedPassword);
-    if (encryptedPlain) {
-      user.encryptedPlainPassword = encryptedPlain;
-      await this.userRepo.save(user);
-    }
     const client = await this.repo.save(
       this.repo.create({
         organizationId,
@@ -267,24 +256,22 @@ export class ClientsService {
   }
 
   async findAll(currentUser: User, organizationId?: string): Promise<ClientResponse[]> {
-    let list: Client[];
-    if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
-      const where = organizationId ? { organizationId: parseInt(organizationId, 10) } : {};
-      list = await this.repo.find({
-        where,
-        relations: ['organization', 'user', 'businessType', 'services', 'directors'],
-        order: { createdAt: 'DESC' },
-      });
-    } else {
-      const orgIdNum = organizationId != null ? parseInt(organizationId, 10) : currentUser.organizationId;
-      if (orgIdNum == null || Number.isNaN(orgIdNum)) return [];
-      if (!this.canAccessOrg(currentUser, orgIdNum)) return [];
-      list = await this.repo.find({
-        where: { organizationId: orgIdNum },
-        relations: ['organization', 'user', 'businessType', 'services', 'directors'],
-        order: { createdAt: 'DESC' },
-      });
-    }
+    const requestedOrgId =
+      organizationId != null && organizationId !== '' ? parseInt(organizationId, 10) : undefined;
+    if (requestedOrgId !== undefined && Number.isNaN(requestedOrgId)) return [];
+
+    const scope = resolveTenantScope(currentUser, requestedOrgId);
+    const where: FindOptionsWhere<Client> = {};
+    if (scope.organizationId != null) where.organizationId = scope.organizationId;
+    // Portal users get only their own record. Without this, a CLIENT login could list
+    // every client in the organization, including directors' PAN and Aadhaar numbers.
+    if (scope.ownUserId != null) where.userId = scope.ownUserId;
+
+    const list = await this.repo.find({
+      where,
+      relations: ['organization', 'user', 'businessType', 'services', 'directors'],
+      order: { createdAt: 'DESC' },
+    });
     return list.map((c) => this.toClientResponse(c));
   }
 
@@ -310,7 +297,6 @@ export class ClientsService {
     if (client.userId) {
       const creds = await this.getLoginCredentials(client.userId);
       if (creds.login_email) response.login_email = creds.login_email;
-      if (creds.login_password) response.login_password = creds.login_password;
     }
     return response;
   }
@@ -405,11 +391,6 @@ export class ClientsService {
             organizationId: client.organizationId,
           }),
         );
-        const encryptedPlain = encryptPlainPassword(password);
-        if (encryptedPlain) {
-          user.encryptedPlainPassword = encryptedPlain;
-          await this.userRepo.save(user);
-        }
         client.userId = user.id;
         await this.repo.save(client);
       } else {
@@ -426,8 +407,6 @@ export class ClientsService {
         user.passwordHash = passwordHash;
         user.name = client.name ?? user.name ?? email.split('@')[0];
         user.phone = client.phone ?? user.phone ?? null;
-        const encryptedPlain = encryptPlainPassword(password);
-        if (encryptedPlain) user.encryptedPlainPassword = encryptedPlain;
         await this.userRepo.save(user);
       }
     }
@@ -445,7 +424,6 @@ export class ClientsService {
     if (updated.userId) {
       const creds = await this.getLoginCredentials(updated.userId);
       if (creds.login_email) response.login_email = creds.login_email;
-      if (creds.login_password) response.login_password = creds.login_password;
     }
     return response;
   }

@@ -1,3 +1,4 @@
+import { PlanGuard, Entitle } from '../billing/plan.guard';
 import {
   Controller,
   Get,
@@ -22,7 +23,8 @@ import { GstFilingService } from './gst-filing.service';
 import { CreateGstSessionDto } from './dto/gst-filing.dto';
 
 @Controller('gst-filing')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PlanGuard)
+@Entitle({ module: 'gst' })
 @Roles(
   RoleName.MASTER_ADMIN,
   RoleName.ORG_ADMIN,
