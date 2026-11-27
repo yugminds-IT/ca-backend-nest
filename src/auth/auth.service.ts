@@ -1,4 +1,12 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, NotFoundException, Optional, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+  BadRequestException,
+  NotFoundException,
+  Optional,
+  ForbiddenException,
+} from '@nestjs/common';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -14,18 +22,22 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { MasterAdminSignupDto } from './dto/master-admin-signup.dto';
 import { OrganizationSignupDto } from './dto/organization-signup.dto';
-import { OrgAdminSignupDto } from './dto/org-admin-signup.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 import { RoleName } from '../common/enums/role.enum';
 import { ActivityLogService } from '../activity-log/activity-log.service';
 import { assertOrganizationAccess } from '../common/utils/org-access.util';
+import { BusinessUnitsService } from '../business-units/business-units.service';
 import { ApiKey } from '../entities/api-key.entity';
 import { EmailTemplate } from '../entities/email-template.entity';
-import { INDUSTRY_PRESETS } from '../common/industry-presets';
-import { createHash, randomBytes } from 'crypto';
+import { IndustryTemplatesService } from '../industry-templates/industry-templates.service';
+import { DEFAULT_UNIT_STRUCTURE, hasAdminPanel } from '../organizations/unit-structure';
+import { BillingService } from '../billing/billing.service';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
 const OTP_EXPIRY_MINUTES = 10;
 const OTP_LENGTH = 6;
+/** Wrong reset-code guesses allowed before the code is thrown away and a new one must be requested. */
+export const MAX_OTP_ATTEMPTS = 5;
 
 @Injectable()
 export class AuthService {
@@ -42,12 +54,18 @@ export class AuthService {
     private apiKeyRepo: Repository<ApiKey>,
     @InjectRepository(EmailTemplate)
     private templateRepo: Repository<EmailTemplate>,
+    private readonly industries: IndustryTemplatesService,
     private jwtService: JwtService,
     private emailService: EmailService,
+    private businessUnits: BusinessUnitsService,
+    private billing: BillingService,
     @Optional() private activityLog?: ActivityLogService,
-  ) { }
+  ) {}
 
-  async login(dto: LoginDto, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
+  async login(
+    dto: LoginDto,
+    meta?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
     const email = dto.email.toLowerCase();
     // passwordHash has `select: false` on User — must addSelect or it is undefined here.
     const user = await this.userRepo
@@ -67,6 +85,18 @@ export class AuthService {
         isError: true,
       });
       throw new UnauthorizedException('Invalid email or password');
+    }
+    if (user.isActive === false) {
+      void this.activityLog?.log({
+        type: 'login_failed',
+        userId: user.id,
+        userEmail: user.email,
+        description: 'Login attempt — account is deactivated',
+        ipAddress: meta?.ipAddress ?? null,
+        userAgent: meta?.userAgent ?? null,
+        isError: true,
+      });
+      throw new UnauthorizedException('This account is deactivated');
     }
     if (!user.passwordHash) {
       void this.activityLog?.log({
@@ -112,9 +142,14 @@ export class AuthService {
     return this.buildTokenResponse(user);
   }
 
-  async logout(user: User, meta?: { ipAddress?: string | null; userAgent?: string | null }) {
+  async logout(
+    user: User,
+    meta?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
     const lastLogin = await this.activityLog?.getLastLogin(user.id);
-    const durationMs = lastLogin ? Date.now() - new Date(lastLogin.createdAt).getTime() : null;
+    const durationMs = lastLogin
+      ? Date.now() - new Date(lastLogin.createdAt).getTime()
+      : null;
     void this.activityLog?.log({
       type: 'logout',
       userId: user.id,
@@ -122,9 +157,10 @@ export class AuthService {
       userRole: user.role?.name ?? null,
       organizationId: user.organizationId ?? null,
       orgName: user.organization?.name ?? null,
-      description: durationMs != null
-        ? `Session ended — ${formatSessionDuration(durationMs)}`
-        : 'Logged out',
+      description:
+        durationMs != null
+          ? `Session ended — ${formatSessionDuration(durationMs)}`
+          : 'Logged out',
       durationMs,
       ipAddress: meta?.ipAddress ?? null,
       userAgent: meta?.userAgent ?? null,
@@ -139,12 +175,19 @@ export class AuthService {
     if (existing) throw new ConflictException('Email already registered');
     const role = await this.roleRepo.findOne({ where: { name: dto.roleName } });
     if (!role) throw new BadRequestException('Invalid role');
-    const orgRoles = [RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE, RoleName.CLIENT];
+    const orgRoles = [
+      RoleName.ORG_ADMIN,
+      RoleName.CAA,
+      RoleName.ORG_EMPLOYEE,
+      RoleName.CLIENT,
+    ];
     if (orgRoles.includes(dto.roleName as RoleName) && !dto.organizationId) {
       throw new BadRequestException('organizationId required for this role');
     }
     if (dto.roleName === RoleName.MASTER_ADMIN && dto.organizationId) {
-      throw new BadRequestException('Master admin must not have organizationId');
+      throw new BadRequestException(
+        'Master admin must not have organizationId',
+      );
     }
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const user = await this.userRepo.save(
@@ -155,10 +198,10 @@ export class AuthService {
         organizationId: dto.organizationId ?? null,
       }),
     );
-    const withRelations = await this.userRepo.findOne({
+    const withRelations = (await this.userRepo.findOne({
       where: { id: user.id },
       relations: ['role', 'organization'],
-    }) as User;
+    })) as User;
     return this.buildTokenResponse(withRelations!);
   }
 
@@ -172,12 +215,14 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
-    if (payload.type !== 'refresh') throw new UnauthorizedException('Invalid token type');
+    if (payload.type !== 'refresh')
+      throw new UnauthorizedException('Invalid token type');
     const user = await this.userRepo.findOne({
       where: { id: payload.sub },
       relations: ['role', 'organization'],
     });
     if (!user) throw new UnauthorizedException('User not found');
+    if (user.isActive === false) throw new UnauthorizedException('This account is deactivated');
     assertOrganizationAccess(user);
     return this.buildTokenResponse(user);
   }
@@ -186,7 +231,9 @@ export class AuthService {
     const email = dto.email.toLowerCase();
     const existing = await this.userRepo.findOne({ where: { email } });
     if (existing) throw new ConflictException('Email already registered');
-    const role = await this.roleRepo.findOne({ where: { name: RoleName.MASTER_ADMIN } });
+    const role = await this.roleRepo.findOne({
+      where: { name: RoleName.MASTER_ADMIN },
+    });
     if (!role) throw new BadRequestException('Master admin role not found');
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const user = await this.userRepo.save(
@@ -197,10 +244,10 @@ export class AuthService {
         organizationId: null,
       }),
     );
-    const withRelations = await this.userRepo.findOne({
+    const withRelations = (await this.userRepo.findOne({
       where: { id: user.id },
       relations: ['role', 'organization'],
-    }) as User;
+    })) as User;
     return this.buildTokenResponse(withRelations!);
   }
 
@@ -226,12 +273,19 @@ export class AuthService {
         pincode: dto.organization.pincode ?? null,
         industry,
         allowedOrigins: dto.organization.allowedOrigins ?? [],
+        unitStructure: dto.organization.unitStructure ?? DEFAULT_UNIT_STRUCTURE,
+        adminPanelEnabled: hasAdminPanel(dto.organization.unitStructure ?? DEFAULT_UNIT_STRUCTURE),
         approvalStatus: 'approved', // Instant onboarding for self-serve users
         accessUntil: null,
         approvedAt: new Date(),
       }),
     );
-    const role = await this.roleRepo.findOne({ where: { name: RoleName.ORG_ADMIN } });
+    await this.businessUnits.ensureDefault(org.id);
+    // The plan they picked on the signup page; without one the workspace starts on Starter.
+    if (dto.organization.planKey) await this.billing.update(org.id, { planKey: dto.organization.planKey });
+    const role = await this.roleRepo.findOne({
+      where: { name: RoleName.ORG_ADMIN },
+    });
     if (!role) throw new BadRequestException('ORG_ADMIN role not found');
     const passwordHash = await bcrypt.hash(dto.admin.password, 10);
     const user = await this.userRepo.save(
@@ -246,7 +300,7 @@ export class AuthService {
     );
 
     // Starter templates for chosen industry (if configured)
-    const preset = INDUSTRY_PRESETS[industry] ?? INDUSTRY_PRESETS.custom;
+    const preset = await this.industries.getOrDefault(industry);
     if (preset?.starterTemplates?.length) {
       const templates = preset.starterTemplates.map((t) =>
         this.templateRepo.create({
@@ -282,33 +336,15 @@ export class AuthService {
     };
   }
 
-  async signupOrgAdmin(dto: OrgAdminSignupDto) {
-    const email = dto.email.toLowerCase();
-    const existingUser = await this.userRepo.findOne({ where: { email } });
-    if (existingUser) throw new ConflictException('Email already registered');
-    const org = await this.orgRepo.findOne({ where: { id: dto.organizationId } });
-    if (!org) throw new NotFoundException('Organization not found');
-    const role = await this.roleRepo.findOne({ where: { name: RoleName.ORG_ADMIN } });
-    if (!role) throw new BadRequestException('ORG_ADMIN role not found');
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.userRepo.save(
-      this.userRepo.create({
-        email,
-        passwordHash,
-        name: dto.name,
-        phone: dto.phone ?? null,
-        roleId: role.id,
-        organizationId: org.id,
-      }),
-    );
-    const withRelations = await this.userRepo.findOne({
-      where: { id: user.id },
-      relations: ['role', 'organization'],
-    }) as User;
-    return this.buildTokenResponse(withRelations!);
-  }
-
-  async getOrganizationsForDropdown(): Promise<{ id: number; name: string; city: string | null; state: string | null; country: string | null }[]> {
+  async getOrganizationsForDropdown(): Promise<
+    {
+      id: number;
+      name: string;
+      city: string | null;
+      state: string | null;
+      country: string | null;
+    }[]
+  > {
     return this.orgRepo.find({
       where: { approvalStatus: 'approved' },
       select: ['id', 'name', 'city', 'state', 'country'],
@@ -317,24 +353,37 @@ export class AuthService {
   }
 
   private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9-]/g, '')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '') || 'org';
+    return (
+      text
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-]/g, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'org'
+    );
   }
 
   async getRoles(): Promise<{ id: number; name: string }[]> {
-    return this.roleRepo.find({ select: ['id', 'name'], order: { name: 'ASC' } });
+    return this.roleRepo.find({
+      select: ['id', 'name'],
+      order: { name: 'ASC' },
+    });
   }
 
   async me(userId: number) {
     const user = await this.userRepo.findOne({
       where: { id: userId },
       relations: ['role', 'organization'],
-      select: ['id', 'email', 'name', 'phone', 'roleId', 'organizationId', 'createdAt'],
+      select: [
+        'id',
+        'email',
+        'name',
+        'phone',
+        'roleId',
+        'organizationId',
+        'createdAt',
+      ],
     });
     if (!user) throw new UnauthorizedException('User not found');
     return user;
@@ -344,34 +393,45 @@ export class AuthService {
     const normalized = email.toLowerCase();
     const user = await this.userRepo.findOne({ where: { email: normalized } });
     if (!user) {
-      return { message: 'If an account exists with this email, you will receive an OTP shortly.' };
+      return {
+        message:
+          'If an account exists with this email, you will receive an OTP shortly.',
+      };
     }
     await this.otpRepo.delete({ email: normalized, type: 'password_reset' });
     const otp = String(randomInt(10 ** (OTP_LENGTH - 1), 10 ** OTP_LENGTH - 1));
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-    await this.otpRepo.save(this.otpRepo.create({ email: normalized, otp, type: 'password_reset', expiresAt }));
+    await this.otpRepo.save(
+      this.otpRepo.create({
+        email: normalized,
+        otp,
+        type: 'password_reset',
+        expiresAt,
+      }),
+    );
     await this.emailService.sendOtp(normalized, otp);
-    return { message: 'If an account exists with this email, you will receive an OTP shortly.' };
+    return {
+      message:
+        'If an account exists with this email, you will receive an OTP shortly.',
+    };
   }
 
-  async verifyPasswordResetOtp(email: string, otp: string): Promise<{ message: string; verified: boolean }> {
-    const normalized = email.toLowerCase();
-    const record = await this.otpRepo.findOne({
-      where: { email: normalized, type: 'password_reset', otp },
-      order: { createdAt: 'DESC' },
-    });
-    if (!record) throw new BadRequestException('Invalid or expired OTP');
-    if (new Date() > record.expiresAt) {
-      await this.otpRepo.remove(record);
-      throw new BadRequestException('OTP has expired');
-    }
+  async verifyPasswordResetOtp(
+    email: string,
+    otp: string,
+  ): Promise<{ message: string; verified: boolean }> {
+    await this.checkResetCode(email.toLowerCase(), otp);
     return { message: 'OTP verified successfully.', verified: true };
   }
 
-  async resetPassword(email: string, otp: string, newPassword: string): Promise<{ message: string }> {
-    const normalized = email.toLowerCase();
+  /**
+   * Checks a password-reset code against the latest one sent to this email.
+   * Every wrong guess counts; after MAX_OTP_ATTEMPTS the code is deleted, so a 6-digit code
+   * cannot be found by trying them all.
+   */
+  private async checkResetCode(email: string, otp: string): Promise<Otp> {
     const record = await this.otpRepo.findOne({
-      where: { email: normalized, type: 'password_reset', otp },
+      where: { email, type: 'password_reset' },
       order: { createdAt: 'DESC' },
     });
     if (!record) throw new BadRequestException('Invalid or expired OTP');
@@ -379,24 +439,59 @@ export class AuthService {
       await this.otpRepo.remove(record);
       throw new BadRequestException('OTP has expired');
     }
+    const given = Buffer.from(String(otp ?? ''));
+    const expected = Buffer.from(record.otp);
+    const matches = given.length === expected.length && timingSafeEqual(given, expected);
+    if (!matches) {
+      record.attempts = (record.attempts ?? 0) + 1;
+      if (record.attempts >= MAX_OTP_ATTEMPTS) {
+        await this.otpRepo.delete({ email, type: 'password_reset' });
+        throw new BadRequestException('Too many wrong codes. Request a new one.');
+      }
+      await this.otpRepo.save(record);
+      throw new BadRequestException('Invalid or expired OTP');
+    }
+    return record;
+  }
+
+  async resetPassword(
+    email: string,
+    otp: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    const normalized = email.toLowerCase();
+    await this.checkResetCode(normalized, otp);
     const user = await this.userRepo.findOne({ where: { email: normalized } });
     if (!user) throw new NotFoundException('User not found');
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     user.encryptedPlainPassword = null; // Clear stored plain password so it is not returned after user changes it
     await this.userRepo.save(user);
     await this.otpRepo.delete({ email: normalized, type: 'password_reset' });
-    return { message: 'Password updated successfully. You can now login with your new password.' };
+    return {
+      message:
+        'Password updated successfully. You can now login with your new password.',
+    };
   }
 
-  async updateProfile(userId: number, dto: UpdateProfileDto): Promise<Partial<User>> {
+  async updateProfile(
+    userId: number,
+    dto: UpdateProfileDto,
+  ): Promise<Partial<User>> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
     if (dto.name !== undefined) user.name = dto.name;
     if (dto.phone !== undefined) user.phone = dto.phone;
-    if (dto.email !== undefined && dto.email.toLowerCase() !== user.email.toLowerCase()) {
-      const existing = await this.userRepo.findOne({ where: { email: dto.email.toLowerCase() } });
+    if (
+      dto.email !== undefined &&
+      dto.email.toLowerCase() !== user.email.toLowerCase()
+    ) {
+      const existing = await this.userRepo.findOne({
+        where: { email: dto.email.toLowerCase() },
+      });
       if (existing && existing.id !== user.id) {
-        throw new ConflictException('Email is already in use by another account');
+        throw new ConflictException(
+          'Email is already in use by another account',
+        );
       }
       user.email = dto.email.toLowerCase();
     }
@@ -404,7 +499,15 @@ export class AuthService {
     const updated = await this.userRepo.findOne({
       where: { id: userId },
       relations: ['role', 'organization'],
-      select: ['id', 'email', 'name', 'phone', 'roleId', 'organizationId', 'createdAt'],
+      select: [
+        'id',
+        'email',
+        'name',
+        'phone',
+        'roleId',
+        'organizationId',
+        'createdAt',
+      ],
     });
     return updated!;
   }
@@ -417,8 +520,14 @@ export class AuthService {
       organizationId: user.organizationId ?? undefined,
       type: 'access',
     };
-    const accessMinutes = parseInt(String(process.env.ACCESS_TOKEN_EXPIRE_MINUTES ?? 60), 10);
-    const refreshDays = parseInt(String(process.env.REFRESH_TOKEN_EXPIRE_DAYS ?? 7), 10);
+    const accessMinutes = parseInt(
+      String(process.env.ACCESS_TOKEN_EXPIRE_MINUTES ?? 60),
+      10,
+    );
+    const refreshDays = parseInt(
+      String(process.env.REFRESH_TOKEN_EXPIRE_DAYS ?? 7),
+      10,
+    );
     const accessToken = this.jwtService.sign(
       { ...payload, type: 'access' },
       {

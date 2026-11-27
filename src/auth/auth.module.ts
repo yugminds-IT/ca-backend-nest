@@ -1,3 +1,4 @@
+import { IndustryTemplatesModule } from '../industry-templates/industry-templates.module';
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -12,10 +13,15 @@ import { Organization } from '../entities/organization.entity';
 import { Otp } from '../entities/otp.entity';
 import { ApiKey } from '../entities/api-key.entity';
 import { EmailTemplate } from '../entities/email-template.entity';
+import { BusinessUnitsModule } from '../business-units/business-units.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Role, Organization, Otp, ApiKey, EmailTemplate]),
+    BusinessUnitsModule,
+    BillingModule,
+    IndustryTemplatesModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

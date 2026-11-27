@@ -38,6 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       relations: ['role', 'organization'],
     });
     if (!user) throw new UnauthorizedException('User not found');
+    if (user.isActive === false) throw new UnauthorizedException('This account is deactivated');
     assertOrganizationAccess(user);
     return user;
   }

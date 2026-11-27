@@ -26,6 +26,10 @@ export class Client {
   @Column('int', { name: 'organizationId' })
   organizationId: number;
 
+  /** Business unit (brand or branch). Null only for rows created before units existed and not yet backfilled. */
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Column({ type: 'varchar', length: 255 })
   name: string;
 

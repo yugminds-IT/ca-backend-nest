@@ -19,6 +19,9 @@ export class ContactList {
   @Column('int', { name: 'organizationId' })
   organizationId: number;
 
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Column({ type: 'varchar', length: 150 })
   name: string;
 

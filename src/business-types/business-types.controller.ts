@@ -17,7 +17,7 @@ export class BusinessTypesController {
   findAll(@CurrentUser() user: User, @Query('organizationId') organizationId?: string) {
     return this.businessTypes.findAll(user, organizationId);
   }
-
+// create a new business type
   @Post()
   @UseGuards(RolesGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)

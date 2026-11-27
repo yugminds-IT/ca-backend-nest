@@ -43,7 +43,9 @@ export class ApiRateLimitGuard implements CanActivate {
       'unknown-ip';
 
     const path = req.path || req.url;
-    const isPublicForm = path.includes('send-form');
+    // Public form submissions: the key-based endpoints and hosted forms (/api/v1/f/<slug>/submit).
+    const isPublicForm =
+      path.includes('send-form') || /\/api\/v1\/f\/[^/]+\/submit$/.test(path);
 
     // Limit configuration
     const maxRequests = isPublicForm ? 25 : 120; // 25 submissions/min for forms, 120/min for API

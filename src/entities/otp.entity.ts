@@ -17,6 +17,10 @@ export class Otp {
   @Column({ type: 'timestamp', name: 'expiresAt' })
   expiresAt: Date;
 
+  /** Wrong guesses so far. The code is thrown away after MAX_OTP_ATTEMPTS. */
+  @Column({ type: 'int', default: 0 })
+  attempts: number;
+
   @CreateDateColumn()
   createdAt: Date;
 }

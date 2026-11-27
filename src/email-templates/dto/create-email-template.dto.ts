@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsIn, IsNumber, MaxLength, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsNumber, IsInt, Min, MaxLength, MinLength } from 'class-validator';
 import { TemplateCategory } from '../constants/template-category.enum';
 import { TEMPLATE_TYPES_BY_CATEGORY } from '../constants/template-type.enum';
 
@@ -37,6 +37,12 @@ export class CreateEmailTemplateDto {
   @IsOptional()
   @IsNumber()
   organizationId?: number | null;
+
+  /** Unit-specific template: sent from that unit's sending account. Omit for an organization-wide template. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  businessUnitId?: number | null;
 }
 
 export function validateTemplateType(category: string, type: string): boolean {

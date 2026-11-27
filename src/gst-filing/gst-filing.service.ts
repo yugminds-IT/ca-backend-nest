@@ -13,6 +13,13 @@ import { User } from '../entities/user.entity';
 export class GstFilingService {
   private readonly aiUrl = process.env.AI_ENGINE_URL ?? 'http://localhost:8001';
 
+  /** Every call to the AI engine carries the shared key it requires (AI_ENGINE_API_KEY). */
+  private aiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set('X-API-Key', process.env.AI_ENGINE_API_KEY ?? '');
+    return fetch(url, { ...init, headers });
+  }
+
   constructor(
     @InjectRepository(GstFilingSession)
     private repo: Repository<GstFilingSession>,
@@ -58,7 +65,7 @@ export class GstFilingService {
     session: GstFilingSession,
   ): Promise<GstFilingSession> {
     try {
-      const res = await fetch(
+      const res = await this.aiFetch(
         `${this.aiUrl}/api/v1/gst/status/${session.celeryTaskId}`,
         { signal: AbortSignal.timeout(5_000) },
       );
@@ -105,7 +112,7 @@ export class GstFilingService {
     // Sync extraction — runs inline in the AI service, no Celery worker needed.
     let res: Response;
     try {
-      res = await fetch(`${this.aiUrl}/api/v1/gst/extract/sync`, {
+      res = await this.aiFetch(`${this.aiUrl}/api/v1/gst/extract/sync`, {
         method: 'POST',
         body: form,
         signal: AbortSignal.timeout(600_000), // 10 min ceiling

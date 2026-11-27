@@ -5,10 +5,16 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ClassSerializerInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+import { getSmtpEncryptionKey } from './common/utils/smtp-key';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Fail fast: the app must not start without the key that protects stored SMTP passwords.
+  getSmtpEncryptionKey(app.get(ConfigService));
+
   app.useGlobalInterceptors(
     new ClassSerializerInterceptor(app.get(Reflector)),
   );
@@ -74,6 +80,12 @@ async function bootstrap() {
   // Security headers
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.disable('x-powered-by');
+  // Behind a reverse proxy (nginx, a load balancer), set TRUST_PROXY to how many proxies sit in front
+  // (usually 1), so req.ip is the real client and per-IP login limits work. Unset: the socket address.
+  const trustProxy = process.env.TRUST_PROXY?.trim();
+  if (trustProxy) {
+    expressApp.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+  }
   expressApp.use((_req: any, res: any, next: () => void) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
