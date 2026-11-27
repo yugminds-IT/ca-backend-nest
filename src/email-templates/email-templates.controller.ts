@@ -13,6 +13,8 @@ import {
 import { Public } from '../common/decorators/public.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard } from '../access/permissions.guard';
+import { Require } from '../access/require.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../entities/user.entity';
@@ -32,13 +34,25 @@ export class EmailTemplatesController {
     private emailService: EmailService,
   ) {}
 
-  /** Send a simple test email (no auth required). */
-  @Public()
+  /**
+   * Send a test email through the caller's organization SMTP.
+   * This used to be public and sent through the global SMTP, which made it an open mail relay.
+   */
+  @UseGuards(RolesGuard, PermissionsGuard)
+  @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @Require('templates.manage')
   @Post('test-mail')
-  async sendTestMail(@Body() dto: SendTestMailDto) {
+  async sendTestMail(@Body() dto: SendTestMailDto, @CurrentUser() user: User) {
     const subject = dto.subject ?? 'CAA Test Email';
     const body = dto.body ?? 'This is a test email from the CAA backend.';
-    const sent = await this.emailService.sendMail(dto.to, subject, body);
+    const sent = await this.emailService.sendMail(
+      dto.to,
+      subject,
+      body,
+      undefined,
+      undefined,
+      user.organizationId ?? undefined,
+    );
     return { sent, message: sent ? 'Email sent successfully' : 'SMTP not configured or failed to send' };
   }
 
@@ -64,8 +78,9 @@ export class EmailTemplatesController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, PermissionsGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @Require('templates.manage')
   create(@Body() dto: CreateEmailTemplateDto, @CurrentUser() user: User) {
     return this.service.create(dto, user);
   }
@@ -77,9 +92,11 @@ export class EmailTemplatesController {
     @CurrentUser() user: User,
     @Query('category') category?: string,
     @Query('organizationId') organizationId?: string,
+    @Query('businessUnitId') businessUnitId?: string,
   ) {
     const orgId = organizationId != null ? parseInt(organizationId, 10) : undefined;
-    return this.service.findAll(user, category, orgId);
+    const unitId = businessUnitId != null ? parseInt(businessUnitId, 10) : undefined;
+    return this.service.findAll(user, category, orgId, Number.isInteger(unitId) ? unitId : undefined);
   }
 
   @Get(':id')
@@ -90,8 +107,9 @@ export class EmailTemplatesController {
   }
 
   @Patch(':id')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, PermissionsGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @Require('templates.manage')
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmailTemplateDto,
@@ -101,16 +119,18 @@ export class EmailTemplatesController {
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, PermissionsGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @Require('templates.manage')
   remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.service.remove(id, user);
   }
 
   /** Send email using a template (substitutes variables, converts to HTML). */
   @Post('send')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, PermissionsGuard)
   @Roles(RoleName.MASTER_ADMIN, RoleName.ORG_ADMIN, RoleName.CAA, RoleName.ORG_EMPLOYEE)
+  @Require('leads.edit')
   sendWithTemplate(@Body() dto: SendTemplateEmailDto, @CurrentUser() user: User) {
     return this.service.sendWithTemplate(
       dto.to,

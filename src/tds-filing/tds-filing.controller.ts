@@ -1,3 +1,4 @@
+import { PlanGuard, Entitle } from '../billing/plan.guard';
 import {
   Controller,
   Get,
@@ -10,7 +11,10 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  Res,
+  BadRequestException,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -22,7 +26,8 @@ import { TdsFilingService } from './tds-filing.service';
 import { CreateTdsSessionDto, SetFormTypeDto } from './dto/tds-filing.dto';
 
 @Controller('tds-filing')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PlanGuard)
+@Entitle({ module: 'tds' })
 @Roles(
   RoleName.MASTER_ADMIN,
   RoleName.ORG_ADMIN,
@@ -97,12 +102,18 @@ export class TdsFilingController {
   }
 
   @Get('sessions/:id/download/:type')
-  download(
+  async download(
     @Param('id') id: string,
-    @Param('type') type: 'csi' | 'fvu',
+    @Param('type') type: string,
     @CurrentUser() user: User,
+    @Res() res: Response,
   ) {
-    return this.tds.downloadFile(id, type, user);
+    if (type !== 'csi' && type !== 'fvu') throw new BadRequestException('type must be csi or fvu');
+    const { content, filename } = await this.tds.downloadFile(id, type, user);
+    const safeName = filename.replace(/[^A-Za-z0-9._-]/g, '_');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+    res.send(content);
   }
 
   @Delete('sessions/:id')

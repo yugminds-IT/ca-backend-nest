@@ -23,6 +23,9 @@ export class Contact {
   @Column('int', { name: 'organizationId' })
   organizationId: number;
 
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Index()
   @Column({ type: 'varchar', length: 255 })
   email: string;

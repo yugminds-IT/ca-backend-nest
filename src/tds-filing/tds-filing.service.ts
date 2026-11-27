@@ -14,6 +14,13 @@ import { User } from '../entities/user.entity';
 export class TdsFilingService {
   private readonly aiUrl = process.env.AI_ENGINE_URL ?? 'http://localhost:8001';
 
+  /** Every call to the AI engine carries the shared key it requires (AI_ENGINE_API_KEY). */
+  private aiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set('X-API-Key', process.env.AI_ENGINE_API_KEY ?? '');
+    return fetch(url, { ...init, headers });
+  }
+
   constructor(
     @InjectRepository(TdsFilingSession)
     private repo: Repository<TdsFilingSession>,
@@ -61,7 +68,7 @@ export class TdsFilingService {
     const form = new FormData();
     form.append('file', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.originalname);
 
-    const res = await fetch(`${this.aiUrl}/api/v1/tds/upload/challan`, {
+    const res = await this.aiFetch(`${this.aiUrl}/api/v1/tds/upload/challan`, {
       method: 'POST',
       body: form,
     });
@@ -89,7 +96,7 @@ export class TdsFilingService {
     form.append('file', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.originalname);
     form.append('tds_type', 'salary');
 
-    const res = await fetch(`${this.aiUrl}/api/v1/tds/upload/excel`, {
+    const res = await this.aiFetch(`${this.aiUrl}/api/v1/tds/upload/excel`, {
       method: 'POST',
       body: form,
     });
@@ -112,7 +119,7 @@ export class TdsFilingService {
       throw new BadRequestException('Upload both challan PDF and deductee Excel before comparing');
     }
 
-    const res = await fetch(`${this.aiUrl}/api/v1/tds/compare`, {
+    const res = await this.aiFetch(`${this.aiUrl}/api/v1/tds/compare`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -166,12 +173,12 @@ export class TdsFilingService {
     const tds_type = tdsTypeMap[session.formType] ?? 'salary';
 
     const [csiRes, fvuRes] = await Promise.all([
-      fetch(`${this.aiUrl}/api/v1/tds/generate/csi/sync`, {
+      this.aiFetch(`${this.aiUrl}/api/v1/tds/generate/csi/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ challan: challanData, status: 'F' }),
       }),
-      fetch(`${this.aiUrl}/api/v1/tds/generate/fvu/sync`, {
+      this.aiFetch(`${this.aiUrl}/api/v1/tds/generate/fvu/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -215,10 +222,10 @@ export class TdsFilingService {
 
     const [csiStatus, fvuStatus] = await Promise.all([
       files.csi_task_id
-        ? fetch(`${this.aiUrl}/api/v1/tds/status/${files.csi_task_id}`).then((r) => r.json())
+        ? this.aiFetch(`${this.aiUrl}/api/v1/tds/status/${files.csi_task_id}`).then((r) => r.json())
         : Promise.resolve(null),
       files.fvu_task_id
-        ? fetch(`${this.aiUrl}/api/v1/tds/status/${files.fvu_task_id}`).then((r) => r.json())
+        ? this.aiFetch(`${this.aiUrl}/api/v1/tds/status/${files.fvu_task_id}`).then((r) => r.json())
         : Promise.resolve(null),
     ]);
 
@@ -246,18 +253,24 @@ export class TdsFilingService {
   }
 
   async getForms(): Promise<any> {
-    const res = await fetch(`${this.aiUrl}/api/v1/tds/forms`);
+    const res = await this.aiFetch(`${this.aiUrl}/api/v1/tds/forms`);
     if (!res.ok) throw new InternalServerErrorException('Could not fetch form registry from AI engine');
     return res.json();
   }
 
-  async downloadFile(id: string, fileType: 'csi' | 'fvu', user: User): Promise<{ url: string; filename: string }> {
+  /**
+   * Fetches a generated file from the AI engine for the signed-in user. The browser never talks to the
+   * AI engine itself: it only accepts calls carrying the backend's key and is not exposed publicly.
+   */
+  async downloadFile(id: string, fileType: 'csi' | 'fvu', user: User): Promise<{ content: Buffer; filename: string }> {
     const session = await this.findOne(id, user);
     const files = session.generatedFiles as any;
     if (!files) throw new NotFoundException('No generated files for this session');
     const filename = fileType === 'csi' ? files.csi_filename : files.fvu_filename;
     if (!filename) throw new NotFoundException(`No ${fileType.toUpperCase()} file found`);
-    return { url: `${this.aiUrl}/api/v1/tds/download/file/${filename}`, filename };
+    const res = await this.aiFetch(`${this.aiUrl}/api/v1/tds/download/file/${encodeURIComponent(filename)}`);
+    if (!res.ok) throw new NotFoundException('The generated file is no longer available');
+    return { content: Buffer.from(await res.arrayBuffer()), filename: String(filename) };
   }
 
   async remove(id: string, user: User): Promise<void> {

@@ -34,6 +34,9 @@ export class EmailLog {
   @Column('int', { name: 'organizationId' })
   organizationId: number;
 
+  @Column('int', { name: 'businessUnitId', nullable: true })
+  businessUnitId: number | null;
+
   @Column('int', { name: 'apiKeyId', nullable: true })
   apiKeyId: number | null;
 

@@ -5,7 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
 import { EmailTemplate } from '../entities/email-template.entity';
 import { EmailSchedule } from '../entities/email-schedule.entity';
 import { Organization } from '../entities/organization.entity';
@@ -17,6 +17,8 @@ import { TemplateCategory } from './constants/template-category.enum';
 import { TEMPLATE_TYPES_BY_CATEGORY } from './constants/template-type.enum';
 import { TEMPLATE_VARIABLES } from './constants/template-variables';
 import { EmailService } from '../email/email.service';
+import { BusinessUnitsService } from '../business-units/business-units.service';
+import { AccessService } from '../access/access.service';
 
 @Injectable()
 export class EmailTemplatesService {
@@ -28,6 +30,8 @@ export class EmailTemplatesService {
     @InjectRepository(Organization)
     private organizationRepo: Repository<Organization>,
     private emailService: EmailService,
+    private businessUnits: BusinessUnitsService,
+    private access: AccessService,
   ) {}
 
   /** Dropdown: categories with labels */
@@ -67,6 +71,18 @@ export class EmailTemplatesService {
       }
       organizationId = currentUser.organizationId;
     }
+    // Unit templates must belong to an organization and to a unit of that organization.
+    let businessUnitId: number | null = null;
+    if (dto.businessUnitId != null) {
+      if (organizationId == null) {
+        throw new BadRequestException('A business unit template needs an organization');
+      }
+      businessUnitId = await this.businessUnits.resolveUnitId(organizationId, dto.businessUnitId);
+    }
+    // Staff limited to some brands may only add templates to those brands, not organization-wide ones.
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      await this.access.assertBrand(currentUser, businessUnitId, 'Business unit');
+    }
     const template = this.repo.create({
       category: dto.category,
       type: dto.type,
@@ -74,11 +90,17 @@ export class EmailTemplatesService {
       subject: dto.subject,
       body: dto.body,
       organizationId,
+      businessUnitId,
     });
     return this.repo.save(template);
   }
 
-  async findAll(currentUser: User, category?: string, organizationId?: number): Promise<EmailTemplate[]> {
+  async findAll(
+    currentUser: User,
+    category?: string,
+    organizationId?: number,
+    businessUnitId?: number,
+  ): Promise<EmailTemplate[]> {
     if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
       const qb = this.repo
         .createQueryBuilder('t')
@@ -97,11 +119,26 @@ export class EmailTemplatesService {
       .orderBy('t.category', 'ASC')
       .addOrderBy('t.type', 'ASC');
     if (category) qb.andWhere('t.category = :category', { category });
+    if (businessUnitId != null) {
+      qb.andWhere('(t.businessUnitId IS NULL OR t.businessUnitId = :unitId)', { unitId: businessUnitId });
+    }
+    await this.limitToBrands(qb, currentUser);
     return qb.getMany();
   }
 
+  /** Staff limited to some brands see organization-wide templates and those brands' templates only. */
+  private async limitToBrands(qb: SelectQueryBuilder<EmailTemplate>, user: User): Promise<void> {
+    const limit = await this.access.brandLimitFor(user);
+    if (limit === null) return;
+    if (limit.length === 0) {
+      qb.andWhere('t.businessUnitId IS NULL');
+      return;
+    }
+    qb.andWhere('(t.businessUnitId IS NULL OR t.businessUnitId IN (:...limitUnitIds))', { limitUnitIds: limit });
+  }
+
   /** Templates available for sending: master = only global (own); org = global + org's own */
-  async findAllForSending(currentUser: User): Promise<EmailTemplate[]> {
+  async findAllForSending(currentUser: User, businessUnitId?: number): Promise<EmailTemplate[]> {
     if (currentUser.role?.name === RoleName.MASTER_ADMIN) {
       return this.repo.find({
         where: { organizationId: IsNull() },
@@ -115,23 +152,43 @@ export class EmailTemplatesService {
         order: { category: 'ASC', type: 'ASC' },
       });
     }
-    return this.repo
+    const qb = this.repo
       .createQueryBuilder('t')
       .where('(t.organizationId IS NULL OR t.organizationId = :orgId)', { orgId })
       .orderBy('t.category', 'ASC')
-      .addOrderBy('t.type', 'ASC')
-      .getMany();
+      .addOrderBy('t.type', 'ASC');
+    if (businessUnitId != null) {
+      qb.andWhere('(t.businessUnitId IS NULL OR t.businessUnitId = :unitId)', { unitId: businessUnitId });
+    }
+    await this.limitToBrands(qb, currentUser);
+    return qb.getMany();
   }
 
   async findOne(id: number, currentUser: User): Promise<EmailTemplate> {
     const template = await this.repo.findOne({ where: { id } });
     if (!template) throw new NotFoundException('Template not found');
     if (!this.canAccess(currentUser, template)) throw new ForbiddenException('Access denied');
+    // Another brand's template looks like it does not exist. Organization-wide ones stay readable.
+    if (template.businessUnitId != null && currentUser.role?.name !== RoleName.MASTER_ADMIN) {
+      await this.access.assertBrand(currentUser, template.businessUnitId, 'Template');
+    }
+    return template;
+  }
+
+  /** Changing or deleting a template: staff limited to some brands may only touch those brands' templates. */
+  private async findEditable(id: number, currentUser: User): Promise<EmailTemplate> {
+    const template = await this.findOne(id, currentUser);
+    if (currentUser.role?.name !== RoleName.MASTER_ADMIN && template.organizationId != null) {
+      const limit = await this.access.brandLimitFor(currentUser);
+      if (limit !== null && template.businessUnitId == null) {
+        throw new ForbiddenException('Only an admin can change organization-wide templates');
+      }
+    }
     return template;
   }
 
   async update(id: number, dto: UpdateEmailTemplateDto, currentUser: User): Promise<EmailTemplate> {
-    const template = await this.findOne(id, currentUser);
+    const template = await this.findEditable(id, currentUser);
     if (dto.category != null && dto.type != null && !validateTemplateTypeForUpdate(dto.category, dto.type)) {
       throw new BadRequestException(`Invalid type '${dto.type}' for category '${dto.category}'`);
     }
@@ -144,7 +201,7 @@ export class EmailTemplatesService {
   }
 
   async remove(id: number, currentUser: User): Promise<void> {
-    const template = await this.findOne(id, currentUser);
+    const template = await this.findEditable(id, currentUser);
     await this.repo.remove(template);
   }
 
@@ -163,6 +220,7 @@ export class EmailTemplatesService {
     let subject: string;
     let html: string;
     let text: string;
+    let templateUnitId: number | undefined;
 
     const enriched = { ...variables };
     if (currentUser.organizationId != null) {
@@ -178,6 +236,7 @@ export class EmailTemplatesService {
       const template = await this.repo.findOne({ where: { id: templateIdOrNull } });
       if (!template) throw new NotFoundException('Template not found');
       if (!this.canAccess(currentUser, template)) throw new ForbiddenException('Access denied to this template');
+      templateUnitId = template.businessUnitId ?? undefined;
       subject = this.substituteVariables(template.subject, enriched);
       const body = this.substituteVariables(template.body, enriched);
       html = this.toProfessionalHtml(subject, body);
@@ -200,6 +259,7 @@ export class EmailTemplatesService {
       currentUser.organizationId ?? undefined,
       cc,
       bcc,
+      templateUnitId,
     );
 
     const now = new Date();

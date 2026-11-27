@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { effectiveSmtpSecure } from './smtp-transport.util';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { Organization } from '../entities/organization.entity';
-import { deriveKey, decrypt } from '../common/utils/crypto.util';
+import { MailAccount } from '../entities/mail-account.entity';
+import { decrypt } from '../common/utils/crypto.util';
+import { getSmtpEncryptionKey } from '../common/utils/smtp-key';
 
 /**
  * FRONTEND_URL should be a single URL, but is sometimes misconfigured as a
@@ -15,6 +18,13 @@ import { deriveKey, decrypt } from '../common/utils/crypto.util';
 function firstFrontendUrl(raw: string | undefined): string {
   const first = raw?.split(',')[0]?.trim();
   return first || 'http://localhost:3000';
+}
+
+/** A file attached to an outgoing message (for example a scheduled report). */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -28,13 +38,16 @@ function escapeHtml(s: string): string {
 @Injectable()
 export class EmailService {
   private globalTransporter: Transporter | null = null;
-  private readonly transporterCache = new Map<number, Transporter>();
+  /** Keys: `org:<id>` for legacy organization SMTP, `acct:<id>` for mail accounts. */
+  private readonly transporterCache = new Map<string, Transporter>();
   private readonly logger = new Logger(EmailService.name);
 
   constructor(
     private config: ConfigService,
     @InjectRepository(Organization)
     private orgRepo: Repository<Organization>,
+    @InjectRepository(MailAccount)
+    private mailAccountRepo: Repository<MailAccount>,
   ) {
     const host = this.config.get<string>('SMTP_HOST')?.trim();
     const user = this.config.get<string>('SMTP_USER')?.trim();
@@ -68,16 +81,75 @@ export class EmailService {
     );
   }
 
-  private getEncryptionKey(): Buffer {
-    const k =
-      this.config.get<string>('SMTP_ENCRYPTION_KEY') ??
-      'navedhana-smtp-default-key-change-in-prod';
-    return deriveKey(k);
-  }
-
   /** Invalidate the cached transporter for an org (call after SMTP config is changed or removed) */
   invalidateOrgTransporter(orgId: number): void {
-    this.transporterCache.delete(orgId);
+    this.transporterCache.delete(`org:${orgId}`);
+  }
+
+  /** Call after a mail account's host, credentials or deactivation changes. */
+  invalidateMailAccountTransporter(accountId: number): void {
+    this.transporterCache.delete(`acct:${accountId}`);
+  }
+
+  /**
+   * Outbound account for a unit: the unit's active account, else the organization-wide
+   * active account, else null (the caller then falls back to legacy organization SMTP).
+   */
+  async resolveMailAccount(
+    orgId: number,
+    businessUnitId?: number | null,
+  ): Promise<MailAccount | null> {
+    if (businessUnitId != null) {
+      const unitAccount = await this.mailAccountRepo.findOne({
+        where: { organizationId: orgId, businessUnitId, isActive: true },
+      });
+      if (unitAccount) return unitAccount;
+    }
+    return this.mailAccountRepo.findOne({
+      where: {
+        organizationId: orgId,
+        businessUnitId: IsNull(),
+        isActive: true,
+      },
+    });
+  }
+
+  /** The From address a unit's mail goes out with, if it has its own account. Otherwise null. */
+  async getOutboundFromAddress(
+    orgId: number,
+    businessUnitId?: number | null,
+  ): Promise<string | null> {
+    const account = await this.resolveMailAccount(orgId, businessUnitId);
+    return account?.fromEmail ?? null;
+  }
+
+  private resolveAccountTransporter(
+    account: MailAccount,
+  ): { transporter: Transporter } | null {
+    const key = `acct:${account.id}`;
+    if (!this.transporterCache.has(key)) {
+      try {
+        const pass = decrypt(
+          account.passwordEncrypted,
+          getSmtpEncryptionKey(this.config),
+        );
+        this.transporterCache.set(
+          key,
+          nodemailer.createTransport({
+            host: account.host,
+            port: account.port,
+            secure: effectiveSmtpSecure(account.port, account.secure),
+            auth: { user: account.username, pass },
+          }),
+        );
+      } catch (err) {
+        this.logger.error(
+          `Mail account ${account.id} could not be decrypted. Re-save its password. ${(err as Error).message}`,
+        );
+        return null;
+      }
+    }
+    return { transporter: this.transporterCache.get(key)! };
   }
 
   private async resolveOrgTransporter(
@@ -86,17 +158,17 @@ export class EmailService {
     const org = await this.orgRepo.findOne({ where: { id: orgId } });
     if (!org?.smtpHost || !org?.smtpUser || !org?.smtpPass) return null;
 
-    if (!this.transporterCache.has(orgId)) {
+    if (!this.transporterCache.has(`org:${orgId}`)) {
       try {
-        const key = this.getEncryptionKey();
+        const key = getSmtpEncryptionKey(this.config);
         const pass = decrypt(org.smtpPass, key);
         const transporter = nodemailer.createTransport({
           host: org.smtpHost,
           port: org.smtpPort ?? 587,
-          secure: org.smtpSecure ?? false,
+          secure: effectiveSmtpSecure(org.smtpPort ?? 587, org.smtpSecure ?? false),
           auth: { user: org.smtpUser, pass },
         });
-        this.transporterCache.set(orgId, transporter);
+        this.transporterCache.set(`org:${orgId}`, transporter);
       } catch (err) {
         this.logger.error(
           `Failed to create transporter for org ${orgId} — SMTP password may need re-saving if SMTP_ENCRYPTION_KEY changed:`,
@@ -106,7 +178,7 @@ export class EmailService {
       }
     }
 
-    const transporter = this.transporterCache.get(orgId)!;
+    const transporter = this.transporterCache.get(`org:${orgId}`)!;
     return { transporter, from: org.smtpFrom ?? org.smtpUser };
   }
 
@@ -119,15 +191,30 @@ export class EmailService {
     orgId?: number,
     cc?: string | string[],
     bcc?: string | string[],
+    businessUnitId?: number | null,
+    attachments?: MailAttachment[],
   ): Promise<boolean> {
     let transporter: Transporter | null = null;
     let fromAddress = this.globalFrom;
+    let accountFromName: string | null = null;
+    let whiteLabel = false;
 
     if (orgId != null) {
-      const orgResult = await this.resolveOrgTransporter(orgId);
-      if (orgResult) {
-        transporter = orgResult.transporter;
-        fromAddress = orgResult.from;
+      const account = await this.resolveMailAccount(orgId, businessUnitId);
+      const accountResult = account
+        ? this.resolveAccountTransporter(account)
+        : null;
+      if (account && accountResult) {
+        transporter = accountResult.transporter;
+        fromAddress = account.fromEmail;
+        accountFromName = account.fromName;
+        whiteLabel = account.whiteLabel;
+      } else {
+        const orgResult = await this.resolveOrgTransporter(orgId);
+        if (orgResult) {
+          transporter = orgResult.transporter;
+          fromAddress = orgResult.from;
+        }
       }
     }
 
@@ -141,11 +228,18 @@ export class EmailService {
       return false;
     }
 
-    const from = fromName
-      ? `"${fromName.replace(/"/g, '\\"')}" <${fromAddress}>`
+    const effectiveName = fromName || accountFromName;
+    const from = effectiveName
+      ? `"${effectiveName.replace(/"/g, '\\"')}" <${fromAddress}>`
       : fromAddress;
 
-    const { html: processedHtml, text: processedText } = this.appendLekvyaFooter(html, text);
+    // White-label accounts send the message exactly as composed, without the Lekvya footer.
+    const { html: processedHtml, text: processedText } = whiteLabel
+      ? {
+          html: html ?? (text ? text.replace(/\n/g, '<br>') : ''),
+          text: text ?? '',
+        }
+      : this.appendLekvyaFooter(html, text);
 
     try {
       const mailOptions: any = {
@@ -161,6 +255,7 @@ export class EmailService {
       if (bcc && (Array.isArray(bcc) ? bcc.length > 0 : bcc.trim())) {
         mailOptions.bcc = Array.isArray(bcc) ? bcc.join(', ') : bcc;
       }
+      if (attachments?.length) mailOptions.attachments = attachments;
       await transporter.sendMail(mailOptions);
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return true;
@@ -186,7 +281,9 @@ export class EmailService {
     generatedPassword: string,
     orgId?: number,
   ): Promise<boolean> {
-    const frontendUrl = firstFrontendUrl(this.config.get<string>('FRONTEND_URL'));
+    const frontendUrl = firstFrontendUrl(
+      this.config.get<string>('FRONTEND_URL'),
+    );
     const subject = 'Your CA Client Portal Login Credentials';
     const text = `Hello ${name},\n\nYour CA organization has created a client account for you.\n\nLogin URL: ${frontendUrl}\nEmail: ${email}\nTemporary password: ${generatedPassword}\n\nPlease log in and change your password using "Forgot password" if you wish to set a custom password.\n\nKeep this email secure and do not share your password.`;
     const html = `
@@ -201,21 +298,18 @@ export class EmailService {
     return this.sendMail(email, subject, text, html, undefined, orgId);
   }
 
-  /** Default recipients for Lekvya team notifications (contact form, signups, digests). */
+  /**
+   * Recipients for Lekvya team notifications (contact form, signups, digests).
+   * Configured only via CONTACT_TEAM_EMAILS. There is no hardcoded fallback list,
+   * so an unset variable means team alerts are skipped (with a warning), not sent to personal addresses.
+   */
   private getTeamRecipientEmails(): string[] {
     const fromEnv = this.config.get<string>('CONTACT_TEAM_EMAILS');
-    if (fromEnv?.trim()) {
-      return fromEnv
-        .split(',')
-        .map((e) => e.trim().toLowerCase())
-        .filter(Boolean);
-    }
-    return [
-      'navedhanaprofitamplifier@gmail.com',
-      'mettumanith0@gmail.com',
-      'likithkarnekota@gmail.com',
-      'omprakash160003@gmail.com',
-    ];
+    if (!fromEnv?.trim()) return [];
+    return fromEnv
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
   }
 
   async sendMailToTeam(
@@ -402,15 +496,25 @@ export class EmailService {
     user: string,
     pass: string,
   ): Promise<void> {
-    const t = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
+    const t = nodemailer.createTransport({
+      host,
+      port,
+      secure: effectiveSmtpSecure(port, secure),
+      auth: { user, pass },
+    });
     await t.verify();
   }
 
   /**
    * Appends the "Email sent via Lekvya" footer linking to FRONTEND_URL to every outgoing email.
    */
-  private appendLekvyaFooter(html?: string, text?: string): { html: string; text: string } {
-    const frontendUrl = firstFrontendUrl(this.config.get<string>('FRONTEND_URL')).replace(/\/+$/, '');
+  private appendLekvyaFooter(
+    html?: string,
+    text?: string,
+  ): { html: string; text: string } {
+    const frontendUrl = firstFrontendUrl(
+      this.config.get<string>('FRONTEND_URL'),
+    ).replace(/\/+$/, '');
 
     const footerHtml = `
 <div id="lekvya-email-footer" style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #64748b; line-height: 1.5;">
@@ -424,7 +528,10 @@ export class EmailService {
     let processedHtml = html ?? (text ? text.replace(/\n/g, '<br>') : '');
     if (processedHtml && !processedHtml.includes('lekvya-email-footer')) {
       if (processedHtml.includes('</body>')) {
-        processedHtml = processedHtml.replace('</body>', `${footerHtml}</body>`);
+        processedHtml = processedHtml.replace(
+          '</body>',
+          `${footerHtml}</body>`,
+        );
       } else {
         processedHtml = `${processedHtml}${footerHtml}`;
       }

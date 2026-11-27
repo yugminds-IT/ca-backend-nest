@@ -5,11 +5,18 @@ import {
   IsIn,
   IsArray,
   IsNumber,
+  IsInt,
   IsBoolean,
   IsEmail,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateApiKeyDto {
+  /** Create a lead in the key's unit for each accepted submission. */
+  @IsOptional()
+  @IsBoolean()
+  autoCreateLead?: boolean;
+
   @IsString()
   @IsNotEmpty()
   name: string;
@@ -24,9 +31,20 @@ export class CreateApiKeyDto {
   @IsNumber()
   @IsOptional()
   rateLimitPerMinute?: number;
+
+  /** Business unit this key's forms belong to. Defaults to the organization's default unit. */
+  @IsOptional()
+  @IsInt()
+  @Type(() => Number)
+  businessUnitId?: number;
 }
 
 export class UpdateApiKeyDto {
+  /** Create a lead in the key's unit for each accepted submission. */
+  @IsOptional()
+  @IsBoolean()
+  autoCreateLead?: boolean;
+
   @IsString()
   @IsOptional()
   name?: string;
@@ -42,6 +60,12 @@ export class UpdateApiKeyDto {
   @IsNumber()
   @IsOptional()
   rateLimitPerMinute?: number;
+
+  /** Move this key (and its future submissions) to another unit of the same organization. */
+  @IsOptional()
+  @IsInt()
+  @Type(() => Number)
+  businessUnitId?: number;
 }
 
 export class SendEmailApiDto {
